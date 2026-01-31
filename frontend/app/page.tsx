@@ -1,20 +1,16 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { Settings, Upload, Search, BarChart3, Save, ShieldCheck, Book, GitBranch, Zap, GitPullRequest } from 'lucide-react';
+import { Settings, Upload, BarChart3, Save, Book, GitBranch, ShieldCheck } from 'lucide-react';
 import UploadStep from '../components/UploadStep';
-import AnalysisView from '../components/AnalysisView';
-import QueryView from '../components/QueryView';
 import StatsView from '../components/StatsView';
-import ComplianceView from '../components/ComplianceView';
 import SpecificationManager from '../components/SpecificationManager';
 import GitAnalysisView from '../components/GitAnalysisView';
-import LLMComplianceView from '../components/LLMComplianceView';
 import PRAnalysisView from '../components/PRAnalysisView';
 import { configureAPI, healthCheck } from '../lib/api';
 import '../styles/globals.css';
 
-type View = 'config' | 'upload' | 'analysis' | 'query' | 'stats' | 'compliance' | 'specs' | 'git' | 'llm-compliance' | 'pr-analysis';
+type View = 'config' | 'upload' | 'stats' | 'specs' | 'git' | 'llm-compliance-analysis';
 
 export default function Home() {
   const [currentView, setCurrentView] = useState<View>('config');
@@ -51,7 +47,7 @@ export default function Home() {
       if (health.indexer_ready) {
         setConfigured(true);
         setUploaded(true);
-        setCurrentView('analysis');
+        setCurrentView('stats');
       }
     } catch (err) {
       console.log('API not ready yet');
@@ -80,7 +76,7 @@ export default function Home() {
 
   const handleUploadSuccess = (data: any) => {
     setUploaded(true);
-    setCurrentView('analysis');
+    setCurrentView('stats');
   };
 
   return (
@@ -144,28 +140,6 @@ export default function Home() {
               {uploaded && (
                 <>
                   <button
-                    onClick={() => setCurrentView('analysis')}
-                    className={`px-4 py-3 font-medium transition flex items-center gap-2 ${
-                      currentView === 'analysis'
-                        ? 'border-b-2 border-primary-600 text-primary-600'
-                        : 'text-gray-600 hover:text-gray-800'
-                    }`}
-                  >
-                    <Search size={18} />
-                    Analysis
-                  </button>
-                  <button
-                    onClick={() => setCurrentView('query')}
-                    className={`px-4 py-3 font-medium transition flex items-center gap-2 ${
-                      currentView === 'query'
-                        ? 'border-b-2 border-primary-600 text-primary-600'
-                        : 'text-gray-600 hover:text-gray-800'
-                    }`}
-                  >
-                    <Search size={18} />
-                    Ask Questions
-                  </button>
-                  <button
                     onClick={() => setCurrentView('stats')}
                     className={`px-4 py-3 font-medium transition flex items-center gap-2 ${
                       currentView === 'stats'
@@ -188,17 +162,6 @@ export default function Home() {
                     Specifications
                   </button>
                   <button
-                    onClick={() => setCurrentView('compliance')}
-                    className={`px-4 py-3 font-medium transition flex items-center gap-2 ${
-                      currentView === 'compliance'
-                        ? 'border-b-2 border-primary-600 text-primary-600'
-                        : 'text-gray-600 hover:text-gray-800'
-                    }`}
-                  >
-                    <ShieldCheck size={18} />
-                    Compliance
-                  </button>
-                  <button
                     onClick={() => setCurrentView('git')}
                     className={`px-4 py-3 font-medium transition flex items-center gap-2 ${
                       currentView === 'git'
@@ -210,26 +173,15 @@ export default function Home() {
                     Git Analysis
                   </button>
                   <button
-                    onClick={() => setCurrentView('llm-compliance')}
+                    onClick={() => setCurrentView('llm-compliance-analysis')}
                     className={`px-4 py-3 font-medium transition flex items-center gap-2 ${
-                      currentView === 'llm-compliance'
+                      currentView === 'llm-compliance-analysis'
                         ? 'border-b-2 border-purple-600 text-purple-600'
                         : 'text-gray-600 hover:text-gray-800'
                     }`}
                   >
-                    <Zap size={18} />
-                    LLM Compliance
-                  </button>
-                  <button
-                    onClick={() => setCurrentView('pr-analysis')}
-                    className={`px-4 py-3 font-medium transition flex items-center gap-2 ${
-                      currentView === 'pr-analysis'
-                        ? 'border-b-2 border-purple-600 text-purple-600'
-                        : 'text-gray-600 hover:text-gray-800'
-                    }`}
-                  >
-                    <GitPullRequest size={18} />
-                    PR Analysis
+                    <ShieldCheck size={18} />
+                    LLM Compliance Analysis
                   </button>
                 </>
               )}
@@ -323,21 +275,13 @@ export default function Home() {
           <UploadStep onUploadSuccess={handleUploadSuccess} />
         )}
 
-        {currentView === 'analysis' && uploaded && <AnalysisView />}
-
-        {currentView === 'query' && uploaded && <QueryView />}
-
         {currentView === 'stats' && uploaded && <StatsView />}
 
         {currentView === 'specs' && uploaded && <SpecificationManager />}
 
-        {currentView === 'compliance' && uploaded && <ComplianceView />}
-
         {currentView === 'git' && uploaded && <GitAnalysisView />}
 
-        {currentView === 'llm-compliance' && uploaded && <LLMComplianceView />}
-
-        {currentView === 'pr-analysis' && uploaded && <PRAnalysisView />}
+        {currentView === 'llm-compliance-analysis' && uploaded && <PRAnalysisView />}
       </main>
 
       {/* Footer */}

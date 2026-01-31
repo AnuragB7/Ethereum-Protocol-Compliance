@@ -21,7 +21,9 @@ import {
   ArrowRight,
   BarChart3,
   GitBranch,
-  Download
+  Download,
+  FolderCode,
+  Upload
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { 
@@ -32,7 +34,8 @@ import {
   loadPRGraphToMain,
   startPRAnalysisAsync,
   getJobStatus,
-  JobStatusResponse
+  JobStatusResponse,
+  runLLMCompliance
 } from '../lib/api';
 
 interface Deviation {
@@ -194,6 +197,9 @@ function GraphStatsCard({ stats, graphId, graphPersisted }: GraphStatsProps) {
 }
 
 export default function PRAnalysisView() {
+  // Analysis source - 'pr' for GitHub PR, 'uploaded' for already indexed codebase
+  const [analysisSource, setAnalysisSource] = useState<'pr' | 'uploaded'>('pr');
+  
   // Input state
   const [prUrl, setPrUrl] = useState('');
   const [owner, setOwner] = useState('');
@@ -202,6 +208,10 @@ export default function PRAnalysisView() {
   const [mode, setMode] = useState<'quick' | 'deep' | 'both'>('quick');
   const [githubToken, setGithubToken] = useState('');
   const [useUrlInput, setUseUrlInput] = useState(true);
+  
+  // Uploaded code analysis state
+  const [uploadedAnalysisLoading, setUploadedAnalysisLoading] = useState(false);
+  const [uploadedMaxEntities, setUploadedMaxEntities] = useState(20);
   
   // Result state
   const [loading, setLoading] = useState(false);
@@ -356,6 +366,43 @@ export default function PRAnalysisView() {
     setJobId(null);
     setJobStatus(null);
   };
+
+  // Handle uploaded code compliance analysis
+  const handleUploadedCodeAnalysis = async () => {
+    setUploadedAnalysisLoading(true);
+    setError('');
+    setResult(null);
+    
+    try {
+      const response = await runLLMCompliance(uploadedMaxEntities, 5);
+      
+      // Convert to PRAnalysisResult format for consistent display
+      const report = response.report;
+      const convertedResult: PRAnalysisResult = {
+        pr: 'Uploaded Codebase',
+        timestamp: report.timestamp,
+        deep: {
+          mode: 'deep',
+          success: true,
+          duration_seconds: 0,
+          deviations: report.deviations || [],
+          entities_analyzed: report.total_entities_analyzed || 0,
+          files_analyzed: 0,
+          critical_count: report.critical_count || 0,
+          warning_count: report.warning_count || 0,
+        },
+        combined_deviations: report.deviations || [],
+        total_critical: report.critical_count || 0,
+        total_warning: report.warning_count || 0,
+        compliance_passed: (report.critical_count || 0) === 0,
+      };
+      setResult(convertedResult);
+    } catch (err: any) {
+      setError(err.response?.data?.detail || err.message || 'Analysis failed');
+    } finally {
+      setUploadedAnalysisLoading(false);
+    }
+  };
   
   const toggleDeviation = (index: number) => {
     const newExpanded = new Set(expandedDeviations);
@@ -394,8 +441,8 @@ export default function PRAnalysisView() {
         <div className="flex items-center gap-3">
           <GitPullRequest className="w-8 h-8 text-purple-600" />
           <div>
-            <h2 className="text-2xl font-bold text-gray-900">PR Analysis</h2>
-            <p className="text-gray-600">Analyze GitHub Pull Requests for Ethereum protocol compliance</p>
+            <h2 className="text-2xl font-bold text-gray-900">LLM Compliance Analysis</h2>
+            <p className="text-gray-600">Analyze code for Ethereum protocol compliance</p>
           </div>
         </div>
         
@@ -436,18 +483,102 @@ export default function PRAnalysisView() {
             href="#"
             onClick={(e) => {
               e.preventDefault();
-              // Navigate to LLM Compliance tab - this assumes parent handles navigation
-              window.dispatchEvent(new CustomEvent('navigate', { detail: 'llm-compliance' }));
+              // Navigate to Specifications tab to set up specs
+              window.dispatchEvent(new CustomEvent('navigate', { detail: 'specs' }));
             }}
             className="px-4 py-2 bg-amber-600 text-white rounded-lg hover:bg-amber-700 flex items-center gap-2 transition"
           >
-            Go to LLM Compliance
+            Go to Specifications
             <ArrowRight className="w-4 h-4" />
           </a>
         </div>
       )}
       
-      {/* Input Section */}
+      {/* Analysis Source Selector */}
+      <div className="bg-white rounded-lg shadow p-4">
+        <div className="flex items-center gap-4">
+          <span className="text-sm font-medium text-gray-600">Analyze:</span>
+          <button
+            onClick={() => { setAnalysisSource('pr'); setResult(null); setError(''); }}
+            className={`px-4 py-2 rounded-lg transition flex items-center gap-2 ${
+              analysisSource === 'pr'
+                ? 'bg-purple-600 text-white'
+                : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+            }`}
+          >
+            <GitPullRequest className="w-4 h-4" />
+            GitHub Pull Request
+          </button>
+          <button
+            onClick={() => { setAnalysisSource('uploaded'); setResult(null); setError(''); }}
+            className={`px-4 py-2 rounded-lg transition flex items-center gap-2 ${
+              analysisSource === 'uploaded'
+                ? 'bg-purple-600 text-white'
+                : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+            }`}
+          >
+            <Upload className="w-4 h-4" />
+            Uploaded Code
+          </button>
+        </div>
+      </div>
+      
+      {/* Uploaded Code Analysis Section */}
+      {analysisSource === 'uploaded' && (
+        <div className="bg-white rounded-lg shadow p-6 space-y-4">
+          <div>
+            <h3 className="text-lg font-semibold text-gray-800 mb-2">Analyze Uploaded Codebase</h3>
+            <p className="text-sm text-gray-600 mb-4">
+              Run LLM-powered compliance analysis on the code you uploaded via the Upload tab.
+              This analyzes the indexed code graph against Ethereum specifications.
+            </p>
+          </div>
+          
+          <div className="flex items-center gap-4">
+            <label className="text-sm font-medium text-gray-700">
+              Max Entities to Analyze:
+            </label>
+            <input
+              type="number"
+              min="1"
+              max="100"
+              value={uploadedMaxEntities}
+              onChange={(e) => setUploadedMaxEntities(parseInt(e.target.value) || 20)}
+              className="w-24 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500"
+            />
+            <span className="text-xs text-gray-500">
+              (Higher = more comprehensive but slower)
+            </span>
+          </div>
+          
+          <button
+            onClick={handleUploadedCodeAnalysis}
+            disabled={uploadedAnalysisLoading || !specsIndexed}
+            className="w-full py-3 bg-purple-600 text-white rounded-lg font-medium hover:bg-purple-700 transition disabled:bg-gray-400 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+          >
+            {uploadedAnalysisLoading ? (
+              <>
+                <Loader className="w-5 h-5 animate-spin" />
+                Analyzing Codebase...
+              </>
+            ) : (
+              <>
+                <Play className="w-5 h-5" />
+                Run Compliance Check
+              </>
+            )}
+          </button>
+          
+          {!specsIndexed && (
+            <p className="text-sm text-amber-600">
+              Please index specifications first (Specifications tab → Qdrant Index)
+            </p>
+          )}
+        </div>
+      )}
+      
+      {/* PR Input Section */}
+      {analysisSource === 'pr' && (
       <div className="bg-white rounded-lg shadow p-6 space-y-4">
         <div className="flex items-center gap-4 mb-4">
           <button
@@ -669,6 +800,14 @@ export default function PRAnalysisView() {
           </div>
         )}
       </div>
+      )}
+      
+      {/* Error (shown for both sources) */}
+      {error && analysisSource === 'uploaded' && (
+        <div className="p-4 bg-red-50 border border-red-200 rounded-lg text-red-700">
+          {error}
+        </div>
+      )}
       
       {/* Results Section */}
       {result && (

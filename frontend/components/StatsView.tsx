@@ -29,6 +29,7 @@ export default function StatsView() {
   const [loading, setLoading] = useState(true);
   const [prGraphs, setPrGraphs] = useState<PRGraphMetadata[]>([]);
   const [loadingPrGraphs, setLoadingPrGraphs] = useState(false);
+  const [graphLoadTrigger, setGraphLoadTrigger] = useState(0);  // Used to trigger graph reload
 
   useEffect(() => {
     loadStats();
@@ -64,6 +65,8 @@ export default function StatsView() {
       await loadPRGraphToMain(prId);
       // Refresh stats after loading
       await loadStats();
+      // Trigger graph visualization reload
+      setGraphLoadTrigger(prev => prev + 1);
     } catch (error) {
       console.error('Failed to load PR graph:', error);
     }
@@ -254,7 +257,7 @@ export default function StatsView() {
 
       {/* Graph Visualization */}
       <div className="mt-6">
-        <GraphVisualization />
+        <GraphVisualization key={graphLoadTrigger} autoLoad={graphLoadTrigger > 0} />
       </div>
     </div>
   );

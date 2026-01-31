@@ -7,7 +7,13 @@ import {
   searchEIPs, 
   uploadSpecification,
   addCustomRule,
-  getComplianceRules
+  getComplianceRules,
+  cloneSpecs,
+  ingestSpecs,
+  getSpecStats,
+  querySpecs,
+  resetSpecs,
+  getAvailableForks,
 } from '../lib/api';
 import { 
   Book, 
@@ -24,7 +30,14 @@ import {
   AlertTriangle,
   Info,
   ChevronDown,
-  ChevronRight
+  ChevronRight,
+  Database,
+  Play,
+  RefreshCw,
+  Loader,
+  CheckCircle,
+  XCircle,
+  Zap
 } from 'lucide-react';
 
 interface Rule {
@@ -54,6 +67,14 @@ interface EIPSearchResult {
   cached: boolean;
 }
 
+interface QdrantSpecStats {
+  indexed: boolean;
+  total_files?: number;
+  total_chunks?: number;
+  forks?: string[];
+  eips?: string[];
+}
+
 export default function SpecificationManager() {
   const [specs, setSpecs] = useState<SpecSummary | null>(null);
   const [rules, setRules] = useState<Rule[]>([]);
@@ -61,10 +82,23 @@ export default function SpecificationManager() {
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<EIPSearchResult[]>([]);
   const [searching, setSearching] = useState(false);
-  const [activeTab, setActiveTab] = useState<'overview' | 'rules' | 'add-eip' | 'custom-rule'>('overview');
+  const [activeTab, setActiveTab] = useState<'qdrant-index' | 'overview' | 'rules' | 'add-eip' | 'custom-rule' | 'query-specs'>('qdrant-index');
   const [expandedRule, setExpandedRule] = useState<string | null>(null);
   const [filterSource, setFilterSource] = useState('');
   const [filterSeverity, setFilterSeverity] = useState('');
+  
+  // Qdrant Spec Index state
+  const [qdrantSpecStats, setQdrantSpecStats] = useState<QdrantSpecStats | null>(null);
+  const [availableForks, setAvailableForks] = useState<string[]>([]);
+  const [selectedForks, setSelectedForks] = useState<string[]>([]);
+  const [specLoading, setSpecLoading] = useState(false);
+  const [specError, setSpecError] = useState('');
+  const [specSuccess, setSpecSuccess] = useState('');
+  
+  // Query specs state
+  const [queryText, setQueryText] = useState('');
+  const [queryResults, setQueryResults] = useState<any[]>([]);
+  const [queryAlpha, setQueryAlpha] = useState(0.5);
   
   // Custom rule form
   const [customRule, setCustomRule] = useState({
@@ -85,7 +119,97 @@ export default function SpecificationManager() {
 
   useEffect(() => {
     loadSpecifications();
+    loadQdrantSpecStats();
+    loadAvailableForks();
   }, []);
+  
+  const loadQdrantSpecStats = async () => {
+    try {
+      const response = await getSpecStats();
+      setQdrantSpecStats(response.stats);
+    } catch (err: any) {
+      console.error('Failed to load Qdrant spec stats:', err);
+    }
+  };
+  
+  const loadAvailableForks = async () => {
+    try {
+      const response = await getAvailableForks();
+      setAvailableForks(response.forks || []);
+      if (response.recent_forks) {
+        setSelectedForks(response.recent_forks.filter((f: string) => response.forks?.includes(f)));
+      }
+    } catch (err: any) {
+      console.error('Failed to load forks:', err);
+    }
+  };
+  
+  const handleCloneSpecs = async () => {
+    setSpecLoading(true);
+    setSpecError('');
+    setSpecSuccess('');
+    
+    try {
+      const result = await cloneSpecs('forks/amsterdam', false);
+      setSpecSuccess(result.message);
+      loadAvailableForks();
+    } catch (err: any) {
+      setSpecError(err.response?.data?.detail || 'Failed to clone specs');
+    } finally {
+      setSpecLoading(false);
+    }
+  };
+  
+  const handleIngestSpecs = async () => {
+    setSpecLoading(true);
+    setSpecError('');
+    setSpecSuccess('');
+    
+    try {
+      const forksToIngest = selectedForks.length > 0 ? selectedForks : undefined;
+      const result = await ingestSpecs(forksToIngest, true);
+      setSpecSuccess(`Ingested ${result.stats.total_chunks} spec chunks from ${result.stats.forks_ingested.join(', ')}`);
+      loadQdrantSpecStats();
+    } catch (err: any) {
+      setSpecError(err.response?.data?.detail || 'Failed to ingest specs');
+    } finally {
+      setSpecLoading(false);
+    }
+  };
+  
+  const handleResetSpecs = async () => {
+    if (!confirm('Are you sure you want to reset the specification index?')) return;
+    
+    setSpecLoading(true);
+    setSpecError('');
+    
+    try {
+      await resetSpecs();
+      setSpecSuccess('Specification index reset successfully');
+      setQdrantSpecStats(null);
+      loadQdrantSpecStats();
+    } catch (err: any) {
+      setSpecError(err.response?.data?.detail || 'Failed to reset specs');
+    } finally {
+      setSpecLoading(false);
+    }
+  };
+  
+  const handleQuerySpecs = async () => {
+    if (!queryText.trim()) return;
+    
+    setSpecLoading(true);
+    setSpecError('');
+    
+    try {
+      const result = await querySpecs(queryText, 5, queryAlpha);
+      setQueryResults(result.results || []);
+    } catch (err: any) {
+      setSpecError(err.response?.data?.detail || 'Query failed');
+    } finally {
+      setSpecLoading(false);
+    }
+  };
 
   const loadSpecifications = async () => {
     try {
@@ -251,32 +375,306 @@ export default function SpecificationManager() {
       </div>
 
       {/* Tabs */}
-      <div className="flex border-b mb-6">
+      <div className="flex border-b mb-6 overflow-x-auto">
+        <button
+          onClick={() => setActiveTab('qdrant-index')}
+          className={`px-6 py-3 font-medium flex items-center gap-2 whitespace-nowrap ${activeTab === 'qdrant-index' ? 'border-b-2 border-purple-600 text-purple-600' : 'text-gray-500'}`}
+        >
+          <Database size={18} />
+          Qdrant Index
+        </button>
+        <button
+          onClick={() => setActiveTab('query-specs')}
+          className={`px-6 py-3 font-medium flex items-center gap-2 whitespace-nowrap ${activeTab === 'query-specs' ? 'border-b-2 border-purple-600 text-purple-600' : 'text-gray-500'}`}
+        >
+          <Search size={18} />
+          Query Specs
+        </button>
         <button
           onClick={() => setActiveTab('overview')}
-          className={`px-6 py-3 font-medium ${activeTab === 'overview' ? 'border-b-2 border-primary-600 text-primary-600' : 'text-gray-500'}`}
+          className={`px-6 py-3 font-medium whitespace-nowrap ${activeTab === 'overview' ? 'border-b-2 border-primary-600 text-primary-600' : 'text-gray-500'}`}
         >
-          Overview
+          EIP Rules
         </button>
         <button
           onClick={() => setActiveTab('rules')}
-          className={`px-6 py-3 font-medium ${activeTab === 'rules' ? 'border-b-2 border-primary-600 text-primary-600' : 'text-gray-500'}`}
+          className={`px-6 py-3 font-medium whitespace-nowrap ${activeTab === 'rules' ? 'border-b-2 border-primary-600 text-primary-600' : 'text-gray-500'}`}
         >
           Rules ({rules.length})
         </button>
         <button
           onClick={() => setActiveTab('add-eip')}
-          className={`px-6 py-3 font-medium ${activeTab === 'add-eip' ? 'border-b-2 border-primary-600 text-primary-600' : 'text-gray-500'}`}
+          className={`px-6 py-3 font-medium whitespace-nowrap ${activeTab === 'add-eip' ? 'border-b-2 border-primary-600 text-primary-600' : 'text-gray-500'}`}
         >
           Add EIP
         </button>
         <button
           onClick={() => setActiveTab('custom-rule')}
-          className={`px-6 py-3 font-medium ${activeTab === 'custom-rule' ? 'border-b-2 border-primary-600 text-primary-600' : 'text-gray-500'}`}
+          className={`px-6 py-3 font-medium whitespace-nowrap ${activeTab === 'custom-rule' ? 'border-b-2 border-primary-600 text-primary-600' : 'text-gray-500'}`}
         >
           Custom Rule
         </button>
       </div>
+      
+      {/* Qdrant Index Tab */}
+      {activeTab === 'qdrant-index' && (
+        <div className="space-y-6">
+          {/* Status Messages */}
+          {specError && (
+            <div className="p-4 bg-red-50 border border-red-200 rounded-lg flex items-start gap-2">
+              <XCircle className="text-red-600 flex-shrink-0 mt-0.5" size={20} />
+              <p className="text-red-700">{specError}</p>
+            </div>
+          )}
+          
+          {specSuccess && (
+            <div className="p-4 bg-green-50 border border-green-200 rounded-lg flex items-start gap-2">
+              <CheckCircle className="text-green-600 flex-shrink-0 mt-0.5" size={20} />
+              <p className="text-green-700">{specSuccess}</p>
+            </div>
+          )}
+          
+          {/* Current Status */}
+          <div className="bg-white p-6 rounded-lg shadow-lg">
+            <div className="flex items-center gap-2 mb-4">
+              <Zap className="text-purple-500" size={24} />
+              <h3 className="text-xl font-bold text-gray-800">Ethereum Specification Index (Qdrant)</h3>
+            </div>
+            <p className="text-gray-600 mb-4">
+              Hybrid search index for Ethereum execution specifications. Required for LLM compliance analysis.
+            </p>
+            
+            {qdrantSpecStats?.indexed ? (
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <div className="bg-green-50 p-4 rounded-lg">
+                  <p className="text-sm text-gray-600">Status</p>
+                  <p className="text-xl font-bold text-green-600">Indexed</p>
+                </div>
+                <div className="bg-blue-50 p-4 rounded-lg">
+                  <p className="text-sm text-gray-600">Spec Chunks</p>
+                  <p className="text-xl font-bold text-blue-600">{qdrantSpecStats.total_chunks}</p>
+                </div>
+                <div className="bg-purple-50 p-4 rounded-lg">
+                  <p className="text-sm text-gray-600">Forks</p>
+                  <p className="text-xl font-bold text-purple-600">{qdrantSpecStats.forks?.length || 0}</p>
+                </div>
+                <div className="bg-orange-50 p-4 rounded-lg">
+                  <p className="text-sm text-gray-600">EIPs Found</p>
+                  <p className="text-xl font-bold text-orange-600">{qdrantSpecStats.eips?.length || 0}</p>
+                </div>
+              </div>
+            ) : (
+              <div className="bg-yellow-50 p-4 rounded-lg">
+                <p className="text-yellow-700">
+                  Specifications not indexed. Follow the steps below to set up.
+                </p>
+              </div>
+            )}
+            
+            {qdrantSpecStats?.indexed && qdrantSpecStats.forks && (
+              <div className="mt-4">
+                <p className="text-sm text-gray-600 mb-2">Indexed Forks:</p>
+                <div className="flex flex-wrap gap-2">
+                  {qdrantSpecStats.forks.map((fork) => (
+                    <span key={fork} className="px-3 py-1 bg-purple-100 text-purple-700 rounded-full text-sm">
+                      {fork}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+          
+          {/* Step 1: Clone Specs */}
+          <div className="bg-white p-6 rounded-lg shadow-lg">
+            <div className="flex items-center gap-2 mb-4">
+              <div className="w-8 h-8 rounded-full bg-primary-100 flex items-center justify-center text-primary-600 font-bold">1</div>
+              <h3 className="text-lg font-bold text-gray-800">Clone Ethereum Execution Specs</h3>
+            </div>
+            
+            <p className="text-gray-600 mb-4">
+              Clone the official <code className="bg-gray-100 px-1 rounded">ethereum/execution-specs</code> repository 
+              from GitHub. This contains the Python specifications for all Ethereum forks.
+            </p>
+            
+            <button
+              onClick={handleCloneSpecs}
+              disabled={specLoading}
+              className="flex items-center gap-2 px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition disabled:bg-gray-400"
+            >
+              {specLoading ? <Loader className="animate-spin" size={18} /> : <Download size={18} />}
+              Clone from GitHub
+            </button>
+          </div>
+          
+          {/* Step 2: Select Forks */}
+          <div className="bg-white p-6 rounded-lg shadow-lg">
+            <div className="flex items-center gap-2 mb-4">
+              <div className="w-8 h-8 rounded-full bg-primary-100 flex items-center justify-center text-primary-600 font-bold">2</div>
+              <h3 className="text-lg font-bold text-gray-800">Select Forks to Index</h3>
+            </div>
+            
+            <p className="text-gray-600 mb-4">
+              Choose which Ethereum forks to index. Recent forks (Prague, Cancun) are recommended.
+            </p>
+            
+            {availableForks.length > 0 ? (
+              <div className="flex flex-wrap gap-2">
+                {availableForks.map((fork) => (
+                  <button
+                    key={fork}
+                    onClick={() => {
+                      setSelectedForks((prev) =>
+                        prev.includes(fork)
+                          ? prev.filter((f) => f !== fork)
+                          : [...prev, fork]
+                      );
+                    }}
+                    className={`px-3 py-1 rounded-full text-sm border transition ${
+                      selectedForks.includes(fork)
+                        ? 'bg-primary-600 text-white border-primary-600'
+                        : 'bg-white text-gray-700 border-gray-300 hover:border-primary-400'
+                    }`}
+                  >
+                    {fork}
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <p className="text-gray-500 italic">Clone specs first to see available forks</p>
+            )}
+          </div>
+          
+          {/* Step 3: Ingest */}
+          <div className="bg-white p-6 rounded-lg shadow-lg">
+            <div className="flex items-center gap-2 mb-4">
+              <div className="w-8 h-8 rounded-full bg-primary-100 flex items-center justify-center text-primary-600 font-bold">3</div>
+              <h3 className="text-lg font-bold text-gray-800">Ingest into Qdrant (Hybrid Search)</h3>
+            </div>
+            
+            <p className="text-gray-600 mb-4">
+              Parse specifications and create embeddings for hybrid search (semantic + keyword).
+              This enables both conceptual matching and exact EIP/function name lookup.
+            </p>
+            
+            <div className="flex gap-4">
+              <button
+                onClick={handleIngestSpecs}
+                disabled={specLoading || availableForks.length === 0}
+                className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition disabled:bg-gray-400"
+              >
+                {specLoading ? <Loader className="animate-spin" size={18} /> : <Play size={18} />}
+                Ingest Specifications
+              </button>
+              
+              <button
+                onClick={handleResetSpecs}
+                disabled={specLoading}
+                className="flex items-center gap-2 px-4 py-2 text-red-600 border border-red-300 rounded-lg hover:bg-red-50 transition"
+              >
+                <RefreshCw size={18} />
+                Reset Index
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      
+      {/* Query Specs Tab */}
+      {activeTab === 'query-specs' && (
+        <div className="space-y-6">
+          <div className="bg-white p-6 rounded-lg shadow-lg">
+            <h3 className="text-xl font-bold mb-4 text-gray-800">Query Ethereum Specifications</h3>
+            
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Search Query
+                </label>
+                <input
+                  type="text"
+                  value={queryText}
+                  onChange={(e) => setQueryText(e.target.value)}
+                  onKeyPress={(e) => e.key === 'Enter' && handleQuerySpecs()}
+                  placeholder="e.g., 'EIP-1559 gas calculation' or 'transaction nonce validation'"
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500"
+                />
+              </div>
+              
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Search Balance (Alpha): {queryAlpha.toFixed(2)}
+                </label>
+                <input
+                  type="range"
+                  min="0"
+                  max="1"
+                  step="0.1"
+                  value={queryAlpha}
+                  onChange={(e) => setQueryAlpha(parseFloat(e.target.value))}
+                  className="w-full"
+                />
+                <div className="flex justify-between text-xs text-gray-500">
+                  <span>Keyword (BM25)</span>
+                  <span>Semantic (Embedding)</span>
+                </div>
+              </div>
+              
+              <button
+                onClick={handleQuerySpecs}
+                disabled={specLoading || !queryText.trim()}
+                className="flex items-center gap-2 px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition disabled:bg-gray-400"
+              >
+                {specLoading ? <Loader className="animate-spin" size={18} /> : <Search size={18} />}
+                Search
+              </button>
+            </div>
+          </div>
+          
+          {/* Query Results */}
+          {queryResults.length > 0 && (
+            <div className="bg-white p-6 rounded-lg shadow-lg">
+              <h3 className="text-lg font-bold mb-4 text-gray-800">
+                Results ({queryResults.length})
+              </h3>
+              
+              <div className="space-y-4">
+                {queryResults.map((result, idx) => (
+                  <div key={idx} className="border border-gray-200 rounded-lg p-4">
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center gap-2">
+                        <span className="px-2 py-1 bg-purple-100 text-purple-700 rounded text-sm">
+                          {result.fork}
+                        </span>
+                        <span className="text-gray-600 text-sm">{result.name}</span>
+                      </div>
+                      <span className="text-sm text-gray-500">
+                        Score: {result.score?.toFixed(3)}
+                      </span>
+                    </div>
+                    
+                    <p className="text-xs text-gray-500 mb-2">{result.file_path}</p>
+                    
+                    {result.eip_references && (
+                      <div className="flex gap-1 mb-2">
+                        {result.eip_references.split(',').filter(Boolean).map((eip: string) => (
+                          <span key={eip} className="px-2 py-0.5 bg-blue-100 text-blue-700 rounded text-xs">
+                            {eip.trim()}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                    
+                    <pre className="text-sm bg-gray-50 p-3 rounded overflow-x-auto">
+                      {result.content}
+                    </pre>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {activeTab === 'overview' && specs && (
         <div className="space-y-6">

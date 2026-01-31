@@ -45,7 +45,11 @@ interface NodeInfo {
   connections: number;
 }
 
-export default function GraphVisualization() {
+interface GraphVisualizationProps {
+  autoLoad?: boolean;
+}
+
+export default function GraphVisualization({ autoLoad = false }: GraphVisualizationProps) {
   const networkRef = useRef<HTMLDivElement>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -54,6 +58,7 @@ export default function GraphVisualization() {
   const [network, setNetwork] = useState<any>(null);
   const [physicsEnabled, setPhysicsEnabled] = useState(true);
   const [visLoaded, setVisLoaded] = useState(false);
+  const hasAutoLoaded = useRef(false);
 
   // Load vis-network library
   useEffect(() => {
@@ -67,6 +72,14 @@ export default function GraphVisualization() {
       setVisLoaded(true);
     }
   }, []);
+
+  // Auto-load graph when prop changes
+  useEffect(() => {
+    if (autoLoad && visLoaded && networkRef.current && !hasAutoLoaded.current) {
+      hasAutoLoaded.current = true;
+      loadGraph();
+    }
+  }, [autoLoad, visLoaded]);
 
   const loadGraph = async () => {
     if (!visLoaded || !networkRef.current) return;
