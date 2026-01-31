@@ -1,0 +1,51 @@
+# Code Analysis Platform - Python Requirements
+# Compatible with Python 3.12+
+
+# Core framework (updated for pydantic 2.8+ compatibility)
+fastapi==0.115.6
+uvicorn[standard]==0.27.0
+pydantic>=2.8.0
+
+# LlamaIndex for RAG - Using 0.14.x ecosystem for OpenAILike compatibility
+# llama-index-llms-openai-like 0.5.3 requires:
+#   - llama-index-core>=0.14.3,<0.15
+#   - llama-index-llms-openai>=0.6.0,<0.7
+llama-index-core>=0.14.3,<0.15
+llama-index-llms-openai>=0.6.0,<0.7
+llama-index-llms-openai-like>=0.5.0,<0.6
+llama-index-embeddings-openai>=0.3.0
+
+# Qdrant Vector Store for Hybrid Search (specs)
+llama-index-vector-stores-qdrant>=0.4.0
+qdrant-client>=1.7.0
+fastembed>=0.2.0
+
+# Fix pydantic compatibility
+pydantic-settings>=2.0.0
+
+# For tokenization (required by llama-index-llms-openai-like)
+transformers>=4.37.0
+
+# Async support
+nest-asyncio==1.6.0
+
+# HTTP client
+aiofiles==23.2.1
+python-multipart==0.0.9
+
+# Utilities
+python-dotenv==1.0.0
+typing-extensions>=4.11  # OpenAI requires >=4.11
+
+# Optional: for better parsing
+pyparsing==3.1.1
+
+# Development (optional)
+pytest==7.4.4
+pytest-asyncio==0.23.3
+
+# YAML parsing for specifications
+PyYAML>=6.0.1
+
+# Git operations (optional, for advanced git analysis)
+GitPython>=3.1.40

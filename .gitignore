@@ -1,0 +1,44 @@
+# Virtual environment
+.venv/
+venv/
+env/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.pyw
+*.pyz
+
+# Environment variables (contains secrets)
+.env
+
+# Output directories
+output/
+test_output/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Cloned specs (large, can be re-cloned)
+execution-specs/
+
+# Storage (generated data)
+graph_storage/
+spec_storage/
+.eip_cache/
+
+# Logs
+*.log
+
+# Node modules (for frontend)
+node_modules/
+.next/

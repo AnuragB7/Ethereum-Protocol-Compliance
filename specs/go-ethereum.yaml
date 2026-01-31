@@ -1,0 +1,230 @@
+# Go-Ethereum Development Best Practices
+# Compliance rules for Go code interacting with Ethereum
+
+specification:
+  id: go-ethereum
+  name: Go-Ethereum Best Practices
+  version: "1.0"
+  description: |
+    Compliance rules for Go applications interacting with Ethereum via go-ethereum.
+    Covers error handling, transaction management, and security best practices.
+
+rules:
+  # Error Handling
+  - id: GETH-ERROR-HANDLING
+    category: security
+    severity: critical
+    description: "All Ethereum RPC calls must have proper error handling"
+    patterns:
+      - "ethclient\\."
+      - "client\\.Call"
+      - "client\\.Send"
+      - "client\\.Transact"
+    must_contain:
+      - "err"
+      - "if err"
+    recommendation: "Always check and handle errors: if err != nil { return err }"
+    languages:
+      - go
+
+  - id: GETH-CONTEXT-TIMEOUT
+    category: security
+    severity: warning
+    description: "RPC calls should have context with timeout"
+    patterns:
+      - "ethclient\\."
+      - "\\.CallContract"
+      - "\\.SendTransaction"
+      - "\\.EstimateGas"
+    must_contain:
+      - "context.WithTimeout"
+      - "ctx"
+    recommendation: "Use context with timeout: ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)"
+    languages:
+      - go
+
+  # Transaction Management
+  - id: GETH-NONCE-MANAGEMENT
+    category: security
+    severity: warning
+    description: "Transaction nonce should be properly managed"
+    patterns:
+      - "types\\.NewTransaction"
+      - "types\\.NewTx"
+      - "SendTransaction"
+    must_contain:
+      - "PendingNonceAt"
+      - "nonce"
+    recommendation: "Get pending nonce: nonce, err := client.PendingNonceAt(ctx, fromAddress)"
+    languages:
+      - go
+
+  - id: GETH-GAS-ESTIMATION
+    category: gas
+    severity: warning
+    description: "Gas should be estimated before sending transactions"
+    patterns:
+      - "SendTransaction"
+      - "types\\.NewTransaction"
+    must_contain:
+      - "EstimateGas"
+      - "gasLimit"
+    recommendation: "Estimate gas: gasLimit, err := client.EstimateGas(ctx, callMsg)"
+    languages:
+      - go
+
+  - id: GETH-GAS-PRICE
+    category: gas
+    severity: warning
+    description: "Gas price should be fetched or use EIP-1559 parameters"
+    patterns:
+      - "types\\.NewTransaction"
+      - "SendTransaction"
+    must_contain:
+      - "SuggestGasPrice"
+      - "SuggestGasTipCap"
+      - "gasPrice"
+    recommendation: "Get gas price: gasPrice, err := client.SuggestGasPrice(ctx)"
+    languages:
+      - go
+
+  # Connection Management
+  - id: GETH-CONNECTION-CLOSE
+    category: security
+    severity: warning
+    description: "Ethereum client connections should be properly closed"
+    patterns:
+      - "ethclient\\.Dial"
+    must_contain:
+      - "defer"
+      - "Close"
+    recommendation: "Close client when done: defer client.Close()"
+    languages:
+      - go
+
+  - id: GETH-RECONNECTION
+    category: security
+    severity: info
+    description: "Consider implementing reconnection logic for RPC connections"
+    patterns:
+      - "ethclient\\.Dial"
+    must_contain:
+      - "retry"
+      - "reconnect"
+    recommendation: "Implement exponential backoff for connection retries"
+    languages:
+      - go
+
+  # Private Key Handling
+  - id: GETH-KEY-STORAGE
+    category: security
+    severity: critical
+    description: "Private keys should not be hardcoded or logged"
+    patterns:
+      - "crypto\\.HexToECDSA"
+      - "keystore\\.Key"
+      - "privateKey"
+    must_not_contain:
+      - "log.*privateKey"
+      - "fmt.*privateKey"
+      - "print.*privateKey"
+    recommendation: "Load keys from secure storage, never log or hardcode"
+    languages:
+      - go
+
+  - id: GETH-KEY-ENCRYPTION
+    category: security
+    severity: warning
+    description: "Private keys should be encrypted at rest"
+    patterns:
+      - "crypto\\.HexToECDSA"
+      - "keystore"
+    must_contain:
+      - "keystore"
+      - "Decrypt"
+    recommendation: "Use go-ethereum keystore for encrypted key storage"
+    languages:
+      - go
+
+  # Transaction Signing
+  - id: GETH-CHAIN-ID
+    category: security
+    severity: critical
+    description: "Transactions must use correct chain ID for replay protection"
+    patterns:
+      - "types\\.SignTx"
+      - "NewEIP155Signer"
+    must_contain:
+      - "chainID"
+      - "ChainID"
+    recommendation: "Get chain ID: chainID, err := client.ChainID(ctx)"
+    languages:
+      - go
+
+  - id: GETH-TX-VERIFICATION
+    category: security
+    severity: warning
+    description: "Transaction receipt should be verified after sending"
+    patterns:
+      - "SendTransaction"
+    must_contain:
+      - "TransactionReceipt"
+      - "WaitMined"
+    recommendation: "Wait for and verify receipt: receipt, err := bind.WaitMined(ctx, client, tx)"
+    languages:
+      - go
+
+  # Contract Interaction
+  - id: GETH-ABI-VALIDATION
+    category: security
+    severity: warning
+    description: "Contract ABI should be validated before use"
+    patterns:
+      - "abi\\.JSON"
+      - "NewBoundContract"
+    must_contain:
+      - "err"
+    recommendation: "Check ABI parsing errors: parsedABI, err := abi.JSON(strings.NewReader(abiString))"
+    languages:
+      - go
+
+  - id: GETH-ADDRESS-VALIDATION
+    category: security
+    severity: warning
+    description: "Ethereum addresses should be validated"
+    patterns:
+      - "common\\.HexToAddress"
+    must_contain:
+      - "IsHexAddress"
+    recommendation: "Validate address: if !common.IsHexAddress(addrStr) { return error }"
+    languages:
+      - go
+
+  # Event Handling
+  - id: GETH-EVENT-SUBSCRIPTION
+    category: security
+    severity: warning
+    description: "Event subscriptions should handle errors and reconnection"
+    patterns:
+      - "SubscribeFilterLogs"
+      - "WatchLogs"
+    must_contain:
+      - "Err()"
+      - "select"
+    recommendation: "Handle subscription errors: select { case err := <-sub.Err(): // reconnect }"
+    languages:
+      - go
+
+  # Big Number Handling
+  - id: GETH-BIGINT-SAFETY
+    category: security
+    severity: warning
+    description: "Big integer operations should check for overflow/nil"
+    patterns:
+      - "big\\.NewInt"
+      - "math/big"
+    must_contain:
+      - "nil"
+    recommendation: "Check for nil before operations: if value == nil { value = big.NewInt(0) }"
+    languages:
+      - go

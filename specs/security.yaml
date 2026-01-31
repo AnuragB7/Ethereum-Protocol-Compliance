@@ -1,0 +1,290 @@
+# Ethereum Security Best Practices
+# General security rules for Ethereum/Solidity development
+
+specification:
+  id: security-best-practices
+  name: Ethereum Security Best Practices
+  version: "1.0"
+  description: |
+    Security compliance rules based on common vulnerabilities and 
+    best practices for Ethereum smart contract development.
+
+rules:
+  # Reentrancy
+  - id: SEC-REENTRANCY-EXTERNAL
+    category: reentrancy
+    severity: critical
+    description: "State changes must happen before external calls (CEI pattern)"
+    patterns:
+      - "\\.call\\{"
+      - "\\.transfer\\("
+      - "\\.send\\("
+    must_not_contain:
+      - "state change after call"
+    recommendation: "Follow Checks-Effects-Interactions pattern: update state before external calls"
+    languages:
+      - solidity
+      - go
+
+  - id: SEC-REENTRANCY-GUARD
+    category: reentrancy
+    severity: warning
+    description: "Consider using reentrancy guard for functions with external calls"
+    patterns:
+      - "\\.call\\{"
+      - "\\.transfer\\("
+    must_contain:
+      - "nonReentrant"
+      - "ReentrancyGuard"
+      - "_locked"
+    recommendation: "Use OpenZeppelin ReentrancyGuard or implement mutex pattern"
+    languages:
+      - solidity
+
+  # Access Control
+  - id: SEC-ACCESS-CONTROL-MINT
+    category: access_control
+    severity: critical
+    description: "mint function must have access control"
+    patterns:
+      - "function\\s+mint"
+      - "func.*[Mm]int"
+    must_contain:
+      - "onlyOwner"
+      - "onlyRole"
+      - "onlyMinter"
+      - "require"
+      - "auth"
+    recommendation: "Add access control: onlyOwner, onlyRole(MINTER_ROLE), or custom modifier"
+    languages:
+      - solidity
+      - go
+
+  - id: SEC-ACCESS-CONTROL-BURN
+    category: access_control
+    severity: critical
+    description: "burn function must have proper authorization"
+    patterns:
+      - "function\\s+burn"
+      - "func.*[Bb]urn"
+    must_contain:
+      - "owner"
+      - "approved"
+      - "msg.sender"
+    recommendation: "Verify caller owns tokens or is approved before burning"
+    languages:
+      - solidity
+      - go
+
+  - id: SEC-ACCESS-CONTROL-PAUSE
+    category: access_control
+    severity: critical
+    description: "pause/unpause functions must have access control"
+    patterns:
+      - "function\\s+pause"
+      - "function\\s+unpause"
+    must_contain:
+      - "onlyOwner"
+      - "onlyRole"
+      - "auth"
+    recommendation: "Restrict pause functionality to authorized accounts"
+    languages:
+      - solidity
+
+  - id: SEC-ACCESS-CONTROL-UPGRADE
+    category: access_control
+    severity: critical
+    description: "upgrade functions must have strict access control"
+    patterns:
+      - "function\\s+upgrade"
+      - "upgradeTo"
+      - "_authorizeUpgrade"
+    must_contain:
+      - "onlyOwner"
+      - "onlyRole"
+    recommendation: "Implement multi-sig or timelock for upgrade functions"
+    languages:
+      - solidity
+
+  # Integer Safety
+  - id: SEC-OVERFLOW-SOLIDITY
+    category: overflow
+    severity: warning
+    description: "Use Solidity 0.8+ or SafeMath for arithmetic operations"
+    patterns:
+      - "pragma solidity"
+    must_contain:
+      - "0.8"
+      - "SafeMath"
+    recommendation: "Use Solidity 0.8+ for built-in overflow checks"
+    languages:
+      - solidity
+
+  - id: SEC-DIVISION-ZERO
+    category: overflow
+    severity: critical
+    description: "Division operations must check for zero divisor"
+    patterns:
+      - "/"
+      - "div\\("
+    must_contain:
+      - "!= 0"
+      - "> 0"
+      - "require"
+    recommendation: "Check divisor: require(divisor != 0, 'Division by zero')"
+    languages:
+      - solidity
+      - go
+
+  # Input Validation
+  - id: SEC-ZERO-ADDRESS-CHECK
+    category: security
+    severity: warning
+    description: "Function parameters should check for zero address"
+    patterns:
+      - "function.*address"
+      - "func.*common\\.Address"
+    must_contain:
+      - "address(0)"
+      - "!= 0x0"
+      - "IsZero"
+    recommendation: "Validate: require(addr != address(0), 'Zero address')"
+    languages:
+      - solidity
+      - go
+
+  - id: SEC-ARRAY-LENGTH
+    category: security
+    severity: warning
+    description: "Array operations should validate length and bounds"
+    patterns:
+      - "\\[\\]"
+      - "push"
+      - "length"
+    must_contain:
+      - "length"
+      - "require"
+    recommendation: "Check array bounds and validate lengths match in batch operations"
+    languages:
+      - solidity
+      - go
+
+  # External Calls
+  - id: SEC-LOW-LEVEL-CALL
+    category: security
+    severity: warning
+    description: "Low-level calls should check return value"
+    patterns:
+      - "\\.call\\{"
+      - "\\.delegatecall\\{"
+    must_contain:
+      - "success"
+      - "require"
+    recommendation: "(bool success, ) = target.call{...}(data); require(success, 'Call failed')"
+    languages:
+      - solidity
+
+  - id: SEC-DELEGATECALL
+    category: security
+    severity: critical
+    description: "delegatecall is dangerous - use with extreme caution"
+    patterns:
+      - "\\.delegatecall"
+    must_contain:
+      - "trusted"
+      - "library"
+    recommendation: "Only delegatecall to trusted, immutable contracts. Consider using libraries instead."
+    languages:
+      - solidity
+
+  # Storage
+  - id: SEC-STORAGE-COLLISION
+    category: storage
+    severity: critical
+    description: "Upgradeable contracts must preserve storage layout"
+    patterns:
+      - "upgradeable"
+      - "proxy"
+    must_contain:
+      - "gap"
+      - "__gap"
+      - "StorageSlot"
+    recommendation: "Add storage gap: uint256[50] private __gap;"
+    languages:
+      - solidity
+
+  # Randomness
+  - id: SEC-RANDOMNESS
+    category: security
+    severity: critical
+    description: "Do not use block properties for randomness"
+    patterns:
+      - "block\\.timestamp"
+      - "blockhash"
+      - "block\\.number"
+    must_not_contain:
+      - "random"
+    recommendation: "Use Chainlink VRF or commit-reveal scheme for randomness"
+    languages:
+      - solidity
+
+  # Denial of Service
+  - id: SEC-DOS-LOOP
+    category: security
+    severity: warning
+    description: "Unbounded loops can cause DoS"
+    patterns:
+      - "for.*length"
+      - "while"
+    must_contain:
+      - "limit"
+      - "max"
+    recommendation: "Implement pagination or limit iterations to prevent gas exhaustion"
+    languages:
+      - solidity
+      - go
+
+  - id: SEC-DOS-EXTERNAL
+    category: security
+    severity: warning
+    description: "External calls in loops can cause DoS"
+    patterns:
+      - "for.*call"
+      - "for.*transfer"
+    recommendation: "Use pull over push pattern for payments"
+    languages:
+      - solidity
+
+  # Flash Loans
+  - id: SEC-FLASH-LOAN
+    category: security
+    severity: warning
+    description: "Consider flash loan attacks in DeFi protocols"
+    patterns:
+      - "price"
+      - "oracle"
+      - "balance"
+    must_contain:
+      - "TWAP"
+      - "Chainlink"
+      - "timeWeighted"
+    recommendation: "Use TWAP oracles or Chainlink for price feeds to prevent manipulation"
+    languages:
+      - solidity
+
+  # Front-running
+  - id: SEC-FRONTRUNNING
+    category: security
+    severity: warning
+    description: "Consider front-running protection for sensitive operations"
+    patterns:
+      - "swap"
+      - "trade"
+      - "bid"
+    must_contain:
+      - "deadline"
+      - "minAmount"
+      - "commit"
+    recommendation: "Implement slippage protection, deadlines, or commit-reveal schemes"
+    languages:
+      - solidity

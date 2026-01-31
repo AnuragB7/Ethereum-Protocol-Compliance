@@ -1,0 +1,244 @@
+# ERC-721 Non-Fungible Token Standard Compliance Rules
+# Based on EIP-721: https://eips.ethereum.org/EIPS/eip-721
+
+specification:
+  id: EIP-721
+  name: ERC-721 Non-Fungible Token Standard
+  version: "1.0"
+  description: |
+    Standard interface for non-fungible tokens (NFTs). Defines methods for
+    ownership tracking, transfer, and approval of unique tokens.
+
+rules:
+  # Interface Requirements
+  - id: EIP-721-BALANCE-OF
+    category: interface
+    severity: critical
+    description: "Contract must implement balanceOf(address) returning NFT count"
+    patterns:
+      - "func.*[Bb]alance[Oo]f"
+      - "function\\s+balanceOf"
+    must_contain:
+      - "balanceOf"
+    recommendation: "Implement: function balanceOf(address owner) external view returns (uint256)"
+    languages:
+      - solidity
+      - go
+
+  - id: EIP-721-OWNER-OF
+    category: interface
+    severity: critical
+    description: "Contract must implement ownerOf(uint256) returning token owner"
+    patterns:
+      - "func.*[Oo]wner[Oo]f"
+      - "function\\s+ownerOf"
+    must_contain:
+      - "ownerOf"
+    recommendation: "Implement: function ownerOf(uint256 tokenId) external view returns (address)"
+    languages:
+      - solidity
+      - go
+
+  - id: EIP-721-SAFE-TRANSFER-FROM
+    category: interface
+    severity: critical
+    description: "Contract must implement safeTransferFrom with receiver check"
+    patterns:
+      - "func.*[Ss]afe[Tt]ransfer[Ff]rom"
+      - "function\\s+safeTransferFrom"
+    must_contain:
+      - "safeTransferFrom"
+    recommendation: "Implement both safeTransferFrom overloads with onERC721Received check"
+    languages:
+      - solidity
+      - go
+
+  - id: EIP-721-TRANSFER-FROM
+    category: interface
+    severity: critical
+    description: "Contract must implement transferFrom(address,address,uint256)"
+    patterns:
+      - "func.*[Tt]ransfer[Ff]rom"
+      - "function\\s+transferFrom"
+    must_contain:
+      - "transferFrom"
+    recommendation: "Implement: function transferFrom(address from, address to, uint256 tokenId) external"
+    languages:
+      - solidity
+      - go
+
+  - id: EIP-721-APPROVE
+    category: interface
+    severity: critical
+    description: "Contract must implement approve(address,uint256)"
+    patterns:
+      - "func.*[Aa]pprove[^Ff]"
+      - "function\\s+approve\\s*\\("
+    must_contain:
+      - "approve"
+    recommendation: "Implement: function approve(address to, uint256 tokenId) external"
+    languages:
+      - solidity
+      - go
+
+  - id: EIP-721-SET-APPROVAL-FOR-ALL
+    category: interface
+    severity: critical
+    description: "Contract must implement setApprovalForAll(address,bool)"
+    patterns:
+      - "func.*[Ss]et[Aa]pproval[Ff]or[Aa]ll"
+      - "function\\s+setApprovalForAll"
+    must_contain:
+      - "setApprovalForAll"
+    recommendation: "Implement: function setApprovalForAll(address operator, bool approved) external"
+    languages:
+      - solidity
+      - go
+
+  - id: EIP-721-GET-APPROVED
+    category: interface
+    severity: critical
+    description: "Contract must implement getApproved(uint256)"
+    patterns:
+      - "func.*[Gg]et[Aa]pproved"
+      - "function\\s+getApproved"
+    must_contain:
+      - "getApproved"
+    recommendation: "Implement: function getApproved(uint256 tokenId) external view returns (address)"
+    languages:
+      - solidity
+      - go
+
+  - id: EIP-721-IS-APPROVED-FOR-ALL
+    category: interface
+    severity: critical
+    description: "Contract must implement isApprovedForAll(address,address)"
+    patterns:
+      - "func.*[Ii]s[Aa]pproved[Ff]or[Aa]ll"
+      - "function\\s+isApprovedForAll"
+    must_contain:
+      - "isApprovedForAll"
+    recommendation: "Implement: function isApprovedForAll(address owner, address operator) external view returns (bool)"
+    languages:
+      - solidity
+      - go
+
+  # Event Requirements
+  - id: EIP-721-TRANSFER-EVENT
+    category: event
+    severity: critical
+    description: "Transfer event must be emitted on token transfers"
+    patterns:
+      - "func.*[Tt]ransfer"
+      - "function\\s+.*transfer"
+    must_contain:
+      - "Transfer"
+      - "emit"
+    recommendation: "Emit Transfer(from, to, tokenId) on any transfer including minting/burning"
+    languages:
+      - solidity
+      - go
+
+  - id: EIP-721-APPROVAL-EVENT
+    category: event
+    severity: critical
+    description: "Approval event must be emitted when approval changes"
+    patterns:
+      - "func.*[Aa]pprove[^Ff]"
+      - "function\\s+approve\\s*\\("
+    must_contain:
+      - "Approval"
+      - "emit"
+    recommendation: "Emit Approval(owner, approved, tokenId) when approval is set"
+    languages:
+      - solidity
+      - go
+
+  - id: EIP-721-APPROVAL-FOR-ALL-EVENT
+    category: event
+    severity: critical
+    description: "ApprovalForAll event must be emitted for operator approvals"
+    patterns:
+      - "func.*[Ss]et[Aa]pproval[Ff]or[Aa]ll"
+      - "function\\s+setApprovalForAll"
+    must_contain:
+      - "ApprovalForAll"
+      - "emit"
+    recommendation: "Emit ApprovalForAll(owner, operator, approved)"
+    languages:
+      - solidity
+      - go
+
+  # Security Rules
+  - id: EIP-721-RECEIVER-CHECK
+    category: security
+    severity: critical
+    description: "safeTransferFrom must check onERC721Received for contract recipients"
+    patterns:
+      - "func.*[Ss]afe[Tt]ransfer[Ff]rom"
+      - "function\\s+safeTransferFrom"
+    must_contain:
+      - "onERC721Received"
+      - "IERC721Receiver"
+    recommendation: "Check receiver implements IERC721Receiver and returns correct selector"
+    languages:
+      - solidity
+      - go
+
+  - id: EIP-721-AUTH-CHECK
+    category: security
+    severity: critical
+    description: "Transfers must verify caller is owner, approved, or operator"
+    patterns:
+      - "func.*[Tt]ransfer"
+      - "function\\s+.*transfer"
+    must_contain:
+      - "owner"
+      - "approved"
+    recommendation: "Verify: isApprovedOrOwner(msg.sender, tokenId) before transfer"
+    languages:
+      - solidity
+      - go
+
+  - id: EIP-721-ZERO-ADDRESS
+    category: security
+    severity: warning
+    description: "Should prevent transfers to zero address"
+    patterns:
+      - "func.*[Tt]ransfer"
+      - "function\\s+.*transfer"
+    must_contain:
+      - "address(0)"
+    recommendation: "Add: require(to != address(0), 'Transfer to zero address')"
+    languages:
+      - solidity
+
+  # EIP-165 Support
+  - id: EIP-721-SUPPORTS-INTERFACE
+    category: interface
+    severity: warning
+    description: "NFT contract should implement EIP-165 supportsInterface"
+    patterns:
+      - "contract.*ERC721"
+      - "interface.*ERC721"
+    must_contain:
+      - "supportsInterface"
+      - "interfaceId"
+    recommendation: "Implement EIP-165: supportsInterface(bytes4 interfaceId) returns (bool)"
+    languages:
+      - solidity
+      - go
+
+  # Metadata Extension
+  - id: EIP-721-METADATA
+    category: interface
+    severity: info
+    description: "Consider implementing ERC721Metadata for name, symbol, tokenURI"
+    patterns:
+      - "contract.*ERC721"
+    must_contain:
+      - "tokenURI"
+    recommendation: "Implement tokenURI(uint256 tokenId) for NFT metadata"
+    languages:
+      - solidity
+      - go

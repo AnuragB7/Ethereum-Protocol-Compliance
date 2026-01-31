@@ -1,0 +1,215 @@
+# ERC-20 Token Standard Compliance Rules
+# Based on EIP-20: https://eips.ethereum.org/EIPS/eip-20
+
+specification:
+  id: EIP-20
+  name: ERC-20 Token Standard
+  version: "1.0"
+  description: |
+    Standard interface for fungible tokens. Defines methods for token transfer,
+    approval, and balance queries.
+
+rules:
+  # Interface Requirements
+  - id: EIP-20-TOTAL-SUPPLY
+    category: interface
+    severity: critical
+    description: "Contract must implement totalSupply() returning the total token supply"
+    patterns:
+      - "func.*[Tt]otal[Ss]upply"
+      - "function\\s+totalSupply"
+      - "TotalSupply\\s*\\("
+    must_contain:
+      - "totalSupply"
+    recommendation: "Implement: function totalSupply() public view returns (uint256)"
+    languages:
+      - solidity
+      - go
+      - javascript
+      - typescript
+
+  - id: EIP-20-BALANCE-OF
+    category: interface
+    severity: critical
+    description: "Contract must implement balanceOf(address) returning account balance"
+    patterns:
+      - "func.*[Bb]alance[Oo]f"
+      - "function\\s+balanceOf"
+      - "BalanceOf\\s*\\("
+    must_contain:
+      - "balanceOf"
+    recommendation: "Implement: function balanceOf(address account) public view returns (uint256)"
+    languages:
+      - solidity
+      - go
+      - javascript
+      - typescript
+
+  - id: EIP-20-TRANSFER
+    category: interface
+    severity: critical
+    description: "Contract must implement transfer(address,uint256) for token transfers"
+    patterns:
+      - "func.*[Tt]ransfer[^Ff]"
+      - "function\\s+transfer\\s*\\("
+    must_contain:
+      - "transfer"
+    recommendation: "Implement: function transfer(address to, uint256 amount) public returns (bool)"
+    languages:
+      - solidity
+      - go
+      - javascript
+      - typescript
+
+  - id: EIP-20-TRANSFER-FROM
+    category: interface
+    severity: critical
+    description: "Contract must implement transferFrom(address,address,uint256)"
+    patterns:
+      - "func.*[Tt]ransfer[Ff]rom"
+      - "function\\s+transferFrom"
+    must_contain:
+      - "transferFrom"
+    recommendation: "Implement: function transferFrom(address from, address to, uint256 amount) public returns (bool)"
+    languages:
+      - solidity
+      - go
+      - javascript
+      - typescript
+
+  - id: EIP-20-APPROVE
+    category: interface
+    severity: critical
+    description: "Contract must implement approve(address,uint256) for allowance setting"
+    patterns:
+      - "func.*[Aa]pprove"
+      - "function\\s+approve"
+    must_contain:
+      - "approve"
+    recommendation: "Implement: function approve(address spender, uint256 amount) public returns (bool)"
+    languages:
+      - solidity
+      - go
+      - javascript
+      - typescript
+
+  - id: EIP-20-ALLOWANCE
+    category: interface
+    severity: critical
+    description: "Contract must implement allowance(address,address) to query approvals"
+    patterns:
+      - "func.*[Aa]llowance"
+      - "function\\s+allowance"
+    must_contain:
+      - "allowance"
+    recommendation: "Implement: function allowance(address owner, address spender) public view returns (uint256)"
+    languages:
+      - solidity
+      - go
+      - javascript
+      - typescript
+
+  # Event Requirements
+  - id: EIP-20-TRANSFER-EVENT
+    category: event
+    severity: critical
+    description: "transfer function MUST emit Transfer event"
+    patterns:
+      - "func.*[Tt]ransfer"
+      - "function\\s+transfer"
+    must_contain:
+      - "Transfer"
+      - "emit"
+    recommendation: "Add: emit Transfer(from, to, amount) after updating balances"
+    languages:
+      - solidity
+      - go
+
+  - id: EIP-20-APPROVAL-EVENT
+    category: event
+    severity: critical
+    description: "approve function MUST emit Approval event"
+    patterns:
+      - "func.*[Aa]pprove"
+      - "function\\s+approve"
+    must_contain:
+      - "Approval"
+      - "emit"
+    recommendation: "Add: emit Approval(owner, spender, amount) after setting allowance"
+    languages:
+      - solidity
+      - go
+
+  # Security Rules
+  - id: EIP-20-BALANCE-CHECK
+    category: security
+    severity: critical
+    description: "transfer must verify sender has sufficient balance"
+    patterns:
+      - "func.*[Tt]ransfer"
+      - "function\\s+transfer"
+    must_contain:
+      - "balance"
+      - ">="
+    recommendation: "Add check: require(balanceOf[msg.sender] >= amount, 'Insufficient balance')"
+    languages:
+      - solidity
+      - go
+
+  - id: EIP-20-ALLOWANCE-CHECK
+    category: security
+    severity: critical
+    description: "transferFrom must verify sufficient allowance"
+    patterns:
+      - "func.*[Tt]ransfer[Ff]rom"
+      - "function\\s+transferFrom"
+    must_contain:
+      - "allowance"
+      - ">="
+    recommendation: "Add check: require(allowance[from][msg.sender] >= amount, 'Insufficient allowance')"
+    languages:
+      - solidity
+      - go
+
+  - id: EIP-20-ZERO-ADDRESS
+    category: security
+    severity: warning
+    description: "Should prevent transfers to zero address"
+    patterns:
+      - "func.*[Tt]ransfer"
+      - "function\\s+transfer"
+    must_contain:
+      - "address(0)"
+    recommendation: "Add: require(to != address(0), 'Transfer to zero address')"
+    languages:
+      - solidity
+
+  # Best Practices
+  - id: EIP-20-NAME-SYMBOL
+    category: interface
+    severity: info
+    description: "Token should implement name() and symbol() (optional but recommended)"
+    patterns:
+      - "contract.*ERC20"
+      - "interface.*ERC20"
+    must_contain:
+      - "name"
+      - "symbol"
+    recommendation: "Implement name() and symbol() for better wallet compatibility"
+    languages:
+      - solidity
+      - go
+
+  - id: EIP-20-DECIMALS
+    category: interface
+    severity: info
+    description: "Token should implement decimals() (optional but recommended)"
+    patterns:
+      - "contract.*ERC20"
+      - "interface.*ERC20"
+    must_contain:
+      - "decimals"
+    recommendation: "Implement decimals() - typically returns 18"
+    languages:
+      - solidity
+      - go
