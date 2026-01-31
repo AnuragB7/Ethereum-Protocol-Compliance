@@ -1,0 +1,505 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Property Graph Visualization</title>
+    <script src="https://cdn.jsdelivr.net/npm/vis-network@9.1.6/dist/vis-network.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1600px;
+            margin: 0 auto;
+        }
+
+        .header {
+            text-align: center;
+            color: white;
+            margin-bottom: 30px;
+        }
+
+        .header h1 {
+            font-size: 2.5rem;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            font-size: 1.1rem;
+            opacity: 0.9;
+        }
+
+        .card {
+            background: white;
+            border-radius: 15px;
+            padding: 20px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            margin-bottom: 20px;
+        }
+
+        .controls {
+            display: flex;
+            gap: 15px;
+            align-items: center;
+            flex-wrap: wrap;
+            margin-bottom: 15px;
+        }
+
+        .btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 8px;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .status {
+            padding: 12px;
+            border-radius: 8px;
+            margin-bottom: 15px;
+            display: none;
+        }
+
+        .status.success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+            display: block;
+        }
+
+        .status.error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+            display: block;
+        }
+
+        .status.info {
+            background: #d1ecf1;
+            color: #0c5460;
+            border: 1px solid #bee5eb;
+            display: block;
+        }
+
+        #mynetwork {
+            width: 100%;
+            height: 800px;
+            border: 2px solid #e0e0e0;
+            border-radius: 10px;
+            background: #fafafa;
+        }
+
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+
+        .stat-card {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            border-radius: 8px;
+            text-align: center;
+        }
+
+        .stat-card .number {
+            font-size: 2rem;
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+
+        .stat-card .label {
+            font-size: 0.9rem;
+            opacity: 0.9;
+        }
+
+        .legend {
+            display: flex;
+            gap: 20px;
+            flex-wrap: wrap;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            margin-bottom: 15px;
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .legend-color {
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            border: 2px solid #333;
+        }
+
+        .info-panel {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 8px;
+            margin-top: 15px;
+            display: none;
+        }
+
+        .info-panel.show {
+            display: block;
+        }
+
+        .info-panel h3 {
+            color: #667eea;
+            margin-bottom: 10px;
+        }
+
+        .info-panel p {
+            margin: 5px 0;
+            color: #333;
+        }
+
+        .loader {
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #667eea;
+            border-radius: 50%;
+            width: 20px;
+            height: 20px;
+            animation: spin 1s linear infinite;
+            display: inline-block;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🕸️ Property Graph Visualization</h1>
+            <p>Interactive visualization of code entities and relationships</p>
+        </div>
+
+        <div class="card">
+            <div class="controls">
+                <button class="btn" onclick="loadGraph()" id="loadBtn">
+                    📊 Load Graph Data
+                </button>
+                <button class="btn" onclick="fitNetwork()" id="fitBtn" disabled>
+                    🔍 Fit to View
+                </button>
+                <button class="btn" onclick="togglePhysics()" id="physicsBtn" disabled>
+                    ⚡ Toggle Physics
+                </button>
+            </div>
+
+            <div id="status" class="status"></div>
+
+            <div class="stats" id="stats" style="display: none;"></div>
+
+            <div class="legend" id="legend" style="display: none;">
+                <div class="legend-item">
+                    <div class="legend-color" style="background: #4CAF50;"></div>
+                    <span>Functions/Methods</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color" style="background: #2196F3;"></div>
+                    <span>Classes</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color" style="background: #FF9800;"></div>
+                    <span>Files</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color" style="background: #9C27B0;"></div>
+                    <span>Other Entities</span>
+                </div>
+            </div>
+
+            <div id="mynetwork"></div>
+
+            <div id="infoPanel" class="info-panel">
+                <h3>Node Information</h3>
+                <div id="nodeInfo"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_URL = 'http://localhost:8000';
+        let network = null;
+        let nodes = null;
+        let edges = null;
+        let physicsEnabled = true;
+
+        async function loadGraph() {
+            const btn = document.getElementById('loadBtn');
+            btn.disabled = true;
+            btn.innerHTML = '<span class="loader"></span> Loading...';
+            showStatus('Fetching graph data...', 'info');
+
+            try {
+                const response = await fetch(`${API_URL}/api/graph-data`);
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+                const data = await response.json();
+                
+                if (!data.nodes || !data.edges) {
+                    throw new Error('Invalid graph data received');
+                }
+
+                displayStats(data);
+                createNetwork(data);
+                showStatus(`✅ Graph loaded! ${data.nodes.length} nodes, ${data.edges.length} edges`, 'success');
+                
+                document.getElementById('legend').style.display = 'flex';
+                document.getElementById('fitBtn').disabled = false;
+                document.getElementById('physicsBtn').disabled = false;
+
+            } catch (error) {
+                showStatus(`❌ Error: ${error.message}`, 'error');
+                console.error('Error loading graph:', error);
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = '📊 Load Graph Data';
+            }
+        }
+
+        function displayStats(data) {
+            const statsDiv = document.getElementById('stats');
+            const entityTypes = {};
+            
+            data.nodes.forEach(node => {
+                const type = node.type || 'unknown';
+                entityTypes[type] = (entityTypes[type] || 0) + 1;
+            });
+
+            statsDiv.innerHTML = `
+                <div class="stat-card">
+                    <div class="number">${data.nodes.length}</div>
+                    <div class="label">Total Nodes</div>
+                </div>
+                <div class="stat-card">
+                    <div class="number">${data.edges.length}</div>
+                    <div class="label">Total Edges</div>
+                </div>
+                <div class="stat-card">
+                    <div class="number">${entityTypes.function || 0}</div>
+                    <div class="label">Functions</div>
+                </div>
+                <div class="stat-card">
+                    <div class="number">${entityTypes.class || 0}</div>
+                    <div class="label">Classes</div>
+                </div>
+                <div class="stat-card">
+                    <div class="number">${Object.keys(entityTypes).length}</div>
+                    <div class="label">Entity Types</div>
+                </div>
+            `;
+            statsDiv.style.display = 'grid';
+        }
+
+        function createNetwork(data) {
+            // Prepare nodes
+            const nodesArray = data.nodes.map(node => {
+                let color, shape, size;
+                
+                switch(node.type) {
+                    case 'function':
+                    case 'method':
+                        color = '#4CAF50';
+                        shape = 'dot';
+                        size = 20;
+                        break;
+                    case 'class':
+                        color = '#2196F3';
+                        shape = 'diamond';
+                        size = 25;
+                        break;
+                    case 'file':
+                        color = '#FF9800';
+                        shape = 'box';
+                        size = 15;
+                        break;
+                    default:
+                        color = '#9C27B0';
+                        shape = 'dot';
+                        size = 15;
+                }
+
+                return {
+                    id: node.id,
+                    label: node.name || node.label || node.id,
+                    title: `Type: ${node.type || 'unknown'}<br>Name: ${node.name || node.id}`,
+                    color: color,
+                    shape: shape,
+                    size: size,
+                    font: { size: 12, color: '#333' },
+                    ...node
+                };
+            });
+
+            // Prepare edges
+            const edgesArray = data.edges.map(edge => ({
+                from: edge.source || edge.from,
+                to: edge.target || edge.to,
+                label: edge.relationship || edge.label || '',
+                arrows: 'to',
+                color: { color: '#848484', highlight: '#667eea' },
+                font: { size: 10, color: '#666', strokeWidth: 0 },
+                ...edge
+            }));
+
+            nodes = new vis.DataSet(nodesArray);
+            edges = new vis.DataSet(edgesArray);
+
+            const container = document.getElementById('mynetwork');
+            const graphData = {
+                nodes: nodes,
+                edges: edges
+            };
+
+            const options = {
+                nodes: {
+                    borderWidth: 2,
+                    borderWidthSelected: 4,
+                    font: {
+                        size: 14,
+                        face: 'arial'
+                    }
+                },
+                edges: {
+                    width: 2,
+                    smooth: {
+                        type: 'continuous',
+                        roundness: 0.5
+                    }
+                },
+                physics: {
+                    enabled: true,
+                    barnesHut: {
+                        gravitationalConstant: -8000,
+                        centralGravity: 0.3,
+                        springLength: 150,
+                        springConstant: 0.04,
+                        damping: 0.09,
+                        avoidOverlap: 0.1
+                    },
+                    stabilization: {
+                        iterations: 200,
+                        updateInterval: 25
+                    }
+                },
+                interaction: {
+                    hover: true,
+                    tooltipDelay: 100,
+                    navigationButtons: true,
+                    keyboard: true
+                }
+            };
+
+            network = new vis.Network(container, graphData, options);
+
+            // Event listeners
+            network.on('click', function(params) {
+                if (params.nodes.length > 0) {
+                    const nodeId = params.nodes[0];
+                    const node = nodes.get(nodeId);
+                    showNodeInfo(node);
+                }
+            });
+
+            network.on('stabilizationIterationsDone', function() {
+                network.setOptions({ physics: { enabled: false } });
+                physicsEnabled = false;
+            });
+        }
+
+        function showNodeInfo(node) {
+            const infoPanel = document.getElementById('infoPanel');
+            const nodeInfo = document.getElementById('nodeInfo');
+            
+            let info = `
+                <p><strong>ID:</strong> ${node.id}</p>
+                <p><strong>Name:</strong> ${node.name || node.label || 'N/A'}</p>
+                <p><strong>Type:</strong> ${node.type || 'unknown'}</p>
+            `;
+
+            if (node.language) info += `<p><strong>Language:</strong> ${node.language}</p>`;
+            if (node.file_path) info += `<p><strong>File:</strong> ${node.file_path}</p>`;
+            if (node.line_start) info += `<p><strong>Lines:</strong> ${node.line_start}-${node.line_end || 'N/A'}</p>`;
+            
+            // Get connected nodes
+            const connectedEdges = network.getConnectedEdges(node.id);
+            info += `<p><strong>Connections:</strong> ${connectedEdges.length}</p>`;
+
+            nodeInfo.innerHTML = info;
+            infoPanel.classList.add('show');
+        }
+
+        function fitNetwork() {
+            if (network) {
+                network.fit({
+                    animation: {
+                        duration: 1000,
+                        easingFunction: 'easeInOutQuad'
+                    }
+                });
+            }
+        }
+
+        function togglePhysics() {
+            if (network) {
+                physicsEnabled = !physicsEnabled;
+                network.setOptions({ physics: { enabled: physicsEnabled } });
+                const btn = document.getElementById('physicsBtn');
+                btn.textContent = physicsEnabled ? '⚡ Disable Physics' : '⚡ Enable Physics';
+            }
+        }
+
+        function showStatus(message, type) {
+            const statusEl = document.getElementById('status');
+            statusEl.textContent = message;
+            statusEl.className = `status ${type}`;
+        }
+
+        // Auto-load on page load
+        window.addEventListener('load', () => {
+            setTimeout(loadGraph, 500);
+        });
+    </script>
+</body>
+</html>
+
+
