@@ -1,0 +1,39 @@
+{
+  "owner": "ethereum",
+  "repo": "go-ethereum",
+  "pr_number": 27178,
+  "commit_sha": "dacec24a504ea3d7da17ad743fbaba5e0717cd5f",
+  "timestamp": "2026-01-31T15:09:16.031424",
+  "stats": {
+    "total_entities": 18367,
+    "total_relationships": 72209,
+    "total_files": 1320,
+    "languages": [
+      "go",
+      "javascript",
+      "python"
+    ],
+    "entity_types": {
+      "class": 46,
+      "method": 5890,
+      "function": 7512,
+      "react_component": 637,
+      "package": 1310,
+      "struct": 1928,
+      "interface": 217,
+      "goroutine": 277,
+      "channel": 396,
+      "eth_tx_signing": 131,
+      "eth_contract_binding": 23
+    },
+    "relationship_types": {
+      "imports": 9618,
+      "inherits": 2,
+      "calls": 56347,
+      "extends": 6,
+      "defines": 5875,
+      "spawns": 277,
+      "embeds": 84
+    }
+  }
+}

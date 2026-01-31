@@ -4,10 +4,14 @@ Git Routes
 Endpoints for git repository analysis and webhooks.
 """
 
+import os
+import logging
 from fastapi import APIRouter, HTTPException, Request, Header
 from typing import Optional
 from app.models.requests import CommitAnalysisRequest, RemoteCommitRequest, PRAnalysisRequest, CommitRangeRequest
 from app.api import dependencies as deps
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["Git Analysis"])
 
@@ -26,6 +30,17 @@ def _init_git_components():
         
         deps.git_analyzer = GitAnalyzer(deps.compliance_analyzer)
         deps.webhook_handler = GitWebhookHandler()
+    
+    # Initialize GitHub client if token is available
+    if deps.github_client is None:
+        github_token = os.getenv("GITHUB_TOKEN")
+        if github_token:
+            try:
+                from app.services.github_client import GitHubClient
+                deps.github_client = GitHubClient(github_token)
+                logger.info("GitHub client initialized")
+            except Exception as e:
+                logger.warning(f"Failed to initialize GitHub client: {e}")
 
 
 @router.post("/compliance/analyze-commit")
@@ -146,28 +161,42 @@ async def github_webhook(
     Handle GitHub webhook events.
     
     Supports push and pull_request events for automatic compliance checking.
+    Posts compliance results as PR comments when GITHUB_TOKEN is configured.
     """
     _init_git_components()
     
     try:
+        # Get raw body for signature verification
+        body = await request.body()
         payload = await request.json()
         
         # Verify signature if secret is configured
-        if deps.api_config and deps.api_config.get("github_webhook_secret"):
-            body = await request.body()
-            if not deps.webhook_handler.verify_github_signature(
-                body, x_hub_signature_256,
-                deps.api_config["github_webhook_secret"]
-            ):
+        webhook_secret = os.getenv("GITHUB_WEBHOOK_SECRET")
+        if webhook_secret:
+            if not deps.webhook_handler.verify_github_signature(body, x_hub_signature_256, webhook_secret):
                 raise HTTPException(status_code=401, detail="Invalid signature")
         
         # Process the webhook
         event_type = x_github_event or "unknown"
+        logger.info(f"Received GitHub webhook: {event_type}")
         
         if event_type == "push":
-            result = await deps.webhook_handler.handle_github_push(payload, deps.git_analyzer)
+            result = await deps.webhook_handler.handle_github_push(
+                payload,
+                git_analyzer=deps.git_analyzer,
+                llm_analyzer=deps.llm_compliance_analyzer,
+                github_client=deps.github_client
+            )
         elif event_type == "pull_request":
-            result = await deps.webhook_handler.handle_github_pr(payload, deps.git_analyzer)
+            result = await deps.webhook_handler.handle_github_pull_request(
+                payload,
+                git_analyzer=deps.git_analyzer,
+                llm_analyzer=deps.llm_compliance_analyzer,
+                github_client=deps.github_client,
+                post_comment=True,
+                indexer=deps.indexer,
+                run_deep=False  # Controlled by PR labels
+            )
         else:
             return {"status": "ignored", "event": event_type}
         
@@ -176,6 +205,7 @@ async def github_webhook(
     except HTTPException:
         raise
     except Exception as e:
+        logger.error(f"Webhook error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -196,17 +226,27 @@ async def gitlab_webhook(
         payload = await request.json()
         
         # Verify token if configured
-        if deps.api_config and deps.api_config.get("gitlab_webhook_token"):
-            if x_gitlab_token != deps.api_config["gitlab_webhook_token"]:
+        gitlab_token = os.getenv("GITLAB_WEBHOOK_TOKEN")
+        if gitlab_token:
+            if x_gitlab_token != gitlab_token:
                 raise HTTPException(status_code=401, detail="Invalid token")
         
         # Process the webhook
         event_type = x_gitlab_event or payload.get("object_kind", "unknown")
+        logger.info(f"Received GitLab webhook: {event_type}")
         
         if event_type == "push":
-            result = await deps.webhook_handler.handle_gitlab_push(payload, deps.git_analyzer)
+            result = await deps.webhook_handler.handle_gitlab_push(
+                payload,
+                git_analyzer=deps.git_analyzer,
+                llm_analyzer=deps.llm_compliance_analyzer
+            )
         elif event_type == "merge_request":
-            result = await deps.webhook_handler.handle_gitlab_mr(payload, deps.git_analyzer)
+            result = await deps.webhook_handler.handle_gitlab_merge_request(
+                payload,
+                git_analyzer=deps.git_analyzer,
+                llm_analyzer=deps.llm_compliance_analyzer
+            )
         else:
             return {"status": "ignored", "event": event_type}
         
@@ -215,4 +255,5 @@ async def gitlab_webhook(
     except HTTPException:
         raise
     except Exception as e:
+        logger.error(f"GitLab webhook error: {e}")
         raise HTTPException(status_code=500, detail=str(e))

@@ -4,7 +4,11 @@ API Dependencies
 Shared state and dependency injection for API routes.
 """
 
+import os
+import logging
 from typing import Optional, List, Dict, Any
+
+logger = logging.getLogger(__name__)
 
 # Global state for the application
 # These will be initialized when the API is configured
@@ -29,6 +33,9 @@ eip_fetcher = None  # EIPFetcher instance
 # Git components
 git_analyzer = None  # GitAnalyzer instance
 webhook_handler = None  # GitWebhookHandler instance
+
+# GitHub/GitLab integration
+github_client = None  # GitHubClient instance for posting PR comments
 
 # LLM Compliance components (Qdrant Hybrid Search)
 spec_indexer = None  # SpecificationIndexer instance (Qdrant hybrid search)
@@ -77,11 +84,45 @@ def get_git_analyzer():
     return git_analyzer
 
 
+def get_github_client():
+    """Dependency to get the GitHub client instance."""
+    global github_client
+    
+    if github_client is None:
+        github_token = os.getenv("GITHUB_TOKEN")
+        if github_token:
+            try:
+                from app.services.github_client import GitHubClient
+                github_client = GitHubClient(github_token)
+                logger.info("GitHub client initialized")
+            except Exception as e:
+                logger.warning(f"Failed to initialize GitHub client: {e}")
+    return github_client
+
+
+def init_github_client():
+    """Initialize GitHub client from environment variables."""
+    global github_client
+    
+    github_token = os.getenv("GITHUB_TOKEN")
+    if github_token and github_client is None:
+        try:
+            from app.services.github_client import GitHubClient
+            github_client = GitHubClient(github_token)
+            logger.info("GitHub client initialized successfully")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to initialize GitHub client: {e}")
+            return False
+    return github_client is not None
+
+
 def reset_state():
     """Reset all global state (useful for testing)."""
     global indexer, rag_engine, analysis_engine, entities, relationships
     global api_config, eth_specification, compliance_analyzer, eip_fetcher
     global git_analyzer, webhook_handler, spec_indexer, llm_compliance_analyzer
+    global github_client
     
     indexer = None
     rag_engine = None
@@ -96,3 +137,4 @@ def reset_state():
     webhook_handler = None
     spec_indexer = None
     llm_compliance_analyzer = None
+    github_client = None

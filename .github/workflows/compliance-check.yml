@@ -1,0 +1,275 @@
+# Ethereum Protocol Compliance Check
+# 
+# This workflow automatically checks code changes against Ethereum specifications
+# and posts compliance results as PR comments.
+#
+# MODES:
+#   - Quick (default): Fast diff-based analysis (~10-30 seconds)
+#   - Deep: Comprehensive graph-based analysis (~2-5 minutes)
+#
+# To enable Deep analysis, add the label "compliance-deep-check" to your PR.
+#
+# Required secrets:
+#   - OPENAI_API_KEY: For LLM-powered compliance analysis
+#
+# The GITHUB_TOKEN is automatically provided by GitHub Actions with sufficient
+# permissions to post PR comments and create check runs.
+
+name: Ethereum Compliance Check
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+    paths:
+      # Only run on relevant file changes
+      - '**.go'
+      - '**.sol'
+      - '**.py'
+      - '**.js'
+      - '**.ts'
+      - '**.rs'
+      - '**.java'
+  push:
+    branches:
+      - main
+      - master
+      - develop
+    paths:
+      - '**.go'
+      - '**.sol'
+      - '**.py'
+
+# Ensure only one compliance check runs per PR at a time
+concurrency:
+  group: compliance-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  # ==========================================================================
+  # Quick Analysis - Runs on every PR (fast, diff-based)
+  # ==========================================================================
+  quick-analysis:
+    name: Quick Compliance Check
+    runs-on: ubuntu-latest
+    
+    permissions:
+      contents: read
+      pull-requests: write
+      checks: write
+    
+    outputs:
+      critical_count: ${{ steps.quick-check.outputs.critical_count }}
+      warning_count: ${{ steps.quick-check.outputs.warning_count }}
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: 'backend/requirements.txt'
+      
+      - name: Install dependencies
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      
+      - name: Run Quick Compliance Check
+        id: quick-check
+        working-directory: backend
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_API_BASE: ${{ secrets.OPENAI_API_BASE }}
+        run: |
+          # Run quick analysis
+          python -m cli.compliance_check \
+            --repo . \
+            --commit ${{ github.event.pull_request.head.sha || github.sha }} \
+            --mode quick \
+            --format json \
+            --output quick-report.json \
+            --post-comment \
+            --pr-number ${{ github.event.pull_request.number || '' }} \
+            --repo-owner ${{ github.repository_owner }} \
+            --repo-name ${{ github.event.repository.name }} \
+            --head-sha ${{ github.event.pull_request.head.sha || github.sha }} \
+            --verbose || true
+          
+          # Extract counts for job output
+          if [ -f quick-report.json ]; then
+            CRITICAL=$(cat quick-report.json | python -c "import sys,json; d=json.load(sys.stdin); print(d.get('critical_count', 0))" 2>/dev/null || echo "0")
+            WARNING=$(cat quick-report.json | python -c "import sys,json; d=json.load(sys.stdin); print(d.get('warning_count', 0))" 2>/dev/null || echo "0")
+            echo "critical_count=$CRITICAL" >> $GITHUB_OUTPUT
+            echo "warning_count=$WARNING" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: Upload quick analysis report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: quick-compliance-report
+          path: backend/quick-report.json
+          retention-days: 30
+          if-no-files-found: ignore
+
+  # ==========================================================================
+  # Deep Analysis - Runs only when labeled (comprehensive, graph-based)
+  # ==========================================================================
+  deep-analysis:
+    name: Deep Compliance Check
+    runs-on: ubuntu-latest
+    needs: quick-analysis
+    
+    # Only run if the PR has the deep-check label
+    if: |
+      github.event_name == 'pull_request' && 
+      (contains(github.event.pull_request.labels.*.name, 'compliance-deep-check') ||
+       contains(github.event.pull_request.labels.*.name, 'deep-analysis') ||
+       contains(github.event.pull_request.labels.*.name, 'thorough-check'))
+    
+    permissions:
+      contents: read
+      pull-requests: write
+      checks: write
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: 'backend/requirements.txt'
+      
+      - name: Install dependencies
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      
+      - name: Run Deep Compliance Check
+        working-directory: backend
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_API_BASE: ${{ secrets.OPENAI_API_BASE }}
+        run: |
+          echo "🔬 Running deep analysis with graph ingestion..."
+          
+          # Run deep analysis
+          python -m cli.compliance_check \
+            --repo . \
+            --commit ${{ github.event.pull_request.head.sha }} \
+            --mode deep \
+            --format sarif \
+            --output deep-report.sarif.json \
+            --post-comment \
+            --pr-number ${{ github.event.pull_request.number }} \
+            --repo-owner ${{ github.repository_owner }} \
+            --repo-name ${{ github.event.repository.name }} \
+            --head-sha ${{ github.event.pull_request.head.sha }} \
+            --verbose
+      
+      - name: Upload SARIF results
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: backend/deep-report.sarif.json
+        continue-on-error: true
+      
+      - name: Upload deep analysis report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: deep-compliance-report
+          path: backend/deep-report.sarif.json
+          retention-days: 30
+          if-no-files-found: ignore
+
+  # ==========================================================================
+  # Final Status Check
+  # ==========================================================================
+  compliance-status:
+    name: Compliance Status
+    runs-on: ubuntu-latest
+    needs: [quick-analysis, deep-analysis]
+    if: always()
+    
+    steps:
+      - name: Check compliance results
+        run: |
+          CRITICAL="${{ needs.quick-analysis.outputs.critical_count }}"
+          WARNING="${{ needs.quick-analysis.outputs.warning_count }}"
+          
+          echo "Quick Analysis Results:"
+          echo "  Critical: $CRITICAL"
+          echo "  Warnings: $WARNING"
+          
+          if [ "$CRITICAL" -gt "0" ]; then
+            echo "❌ Compliance check failed with $CRITICAL critical issues"
+            exit 1
+          else
+            echo "✅ Compliance check passed"
+          fi
+
+  # ==========================================================================
+  # On-Demand Deep Analysis (via workflow_dispatch)
+  # ==========================================================================
+  manual-deep-analysis:
+    name: Manual Deep Analysis
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch'
+    
+    permissions:
+      contents: read
+      pull-requests: write
+      checks: write
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: 'backend/requirements.txt'
+      
+      - name: Install dependencies
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      
+      - name: Run Both Quick and Deep Analysis
+        working-directory: backend
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_API_BASE: ${{ secrets.OPENAI_API_BASE }}
+        run: |
+          python -m cli.compliance_check \
+            --repo . \
+            --commit ${{ github.sha }} \
+            --mode both \
+            --format sarif \
+            --output full-report.sarif.json \
+            --create-check-run \
+            --repo-owner ${{ github.repository_owner }} \
+            --repo-name ${{ github.event.repository.name }} \
+            --head-sha ${{ github.sha }} \
+            --verbose

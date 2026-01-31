@@ -12,6 +12,7 @@ from app.api.routes.compliance import router as compliance_router
 from app.api.routes.specifications import router as specs_router
 from app.api.routes.git import router as git_router
 from app.api.routes.llm_compliance import router as llm_compliance_router
+from app.api.routes.pr_analysis import router as pr_analysis_router
 
 __all__ = [
     "health_router",
@@ -21,5 +22,6 @@ __all__ = [
     "compliance_router",
     "specs_router",
     "git_router",
-    "llm_compliance_router"
+    "llm_compliance_router",
+    "pr_analysis_router"
 ]

@@ -17,7 +17,8 @@ from app.api.routes import (
     compliance_router,
     specs_router,
     git_router,
-    llm_compliance_router
+    llm_compliance_router,
+    pr_analysis_router
 )
 
 
@@ -134,6 +135,7 @@ def create_app() -> FastAPI:
     app.include_router(specs_router)
     app.include_router(git_router)
     app.include_router(llm_compliance_router)
+    app.include_router(pr_analysis_router)
     
     return app
 

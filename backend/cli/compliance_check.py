@@ -8,6 +8,9 @@ Usage:
     python -m cli.compliance_check --repo . --commit HEAD --fail-on-critical
     python -m cli.compliance_check --repo . --from-commit abc123 --to-commit HEAD
     python -m cli.compliance_check --codebase ./src --specs ./specs
+    
+GitHub CI Integration:
+    python -m cli.compliance_check --repo . --commit HEAD --post-comment --pr-number 123
 """
 
 import argparse
@@ -177,6 +180,49 @@ Examples:
         help='Fail if more than N deviations found'
     )
     
+    # GitHub Integration options
+    github_group = parser.add_argument_group('GitHub Integration')
+    github_group.add_argument(
+        '--post-comment',
+        action='store_true',
+        help='Post results as PR comment (requires GITHUB_TOKEN env var)'
+    )
+    github_group.add_argument(
+        '--pr-number',
+        type=int,
+        help='PR number for comment posting'
+    )
+    github_group.add_argument(
+        '--repo-owner',
+        type=str,
+        help='Repository owner (e.g., "ethereum")'
+    )
+    github_group.add_argument(
+        '--repo-name',
+        type=str,
+        help='Repository name (e.g., "go-ethereum")'
+    )
+    github_group.add_argument(
+        '--create-check-run',
+        action='store_true',
+        help='Create a GitHub check run (requires GITHUB_TOKEN with checks:write permission)'
+    )
+    github_group.add_argument(
+        '--head-sha',
+        type=str,
+        help='Commit SHA for check run (auto-detected if --repo is used)'
+    )
+    
+    # Analysis Mode options
+    mode_group = parser.add_argument_group('Analysis Mode')
+    mode_group.add_argument(
+        '--mode',
+        type=str,
+        choices=['quick', 'deep', 'both'],
+        default='quick',
+        help='Analysis mode: quick (diff-based, fast), deep (graph-based, thorough), both (run both modes)'
+    )
+    
     return parser
 
 
@@ -303,7 +349,7 @@ def output_sarif(report: dict, output_path: str):
                 "driver": {
                     "name": "Ethereum Compliance Checker",
                     "version": "1.0.0",
-                    "informationUri": "https://github.com/your-org/compliance-checker",
+                    "informationUri": "https://github.com/ethereum/execution-specs",
                     "rules": []
                 }
             },
@@ -347,6 +393,149 @@ def output_sarif(report: dict, output_path: str):
     with open(output_path, 'w') as f:
         json.dump(sarif, f, indent=2)
     print(f"\n📄 SARIF report saved to: {output_path}")
+
+
+def post_github_comment(report: dict, args) -> bool:
+    """
+    Post compliance results as a GitHub PR comment.
+    
+    Returns True if successful, False otherwise.
+    """
+    github_token = os.environ.get('GITHUB_TOKEN')
+    if not github_token:
+        print("Warning: GITHUB_TOKEN not set, skipping PR comment")
+        return False
+    
+    # Get repo info from args or environment
+    owner = args.repo_owner or os.environ.get('GITHUB_REPOSITORY_OWNER')
+    repo_name = args.repo_name or os.environ.get('GITHUB_REPOSITORY', '').split('/')[-1]
+    pr_number = args.pr_number or os.environ.get('GITHUB_PR_NUMBER')
+    
+    # Try to get from GITHUB_REF for PR events
+    if not pr_number:
+        github_ref = os.environ.get('GITHUB_REF', '')
+        if github_ref.startswith('refs/pull/'):
+            try:
+                pr_number = int(github_ref.split('/')[2])
+            except (IndexError, ValueError):
+                pass
+    
+    if not owner or not repo_name:
+        # Try to parse from GITHUB_REPOSITORY
+        full_repo = os.environ.get('GITHUB_REPOSITORY', '')
+        if '/' in full_repo:
+            owner, repo_name = full_repo.split('/', 1)
+    
+    if not all([owner, repo_name, pr_number]):
+        print("Warning: Missing GitHub repository info (owner, repo, pr_number)")
+        print(f"  Owner: {owner}, Repo: {repo_name}, PR: {pr_number}")
+        return False
+    
+    try:
+        from app.services.github_client import GitHubClient, format_compliance_comment
+        
+        client = GitHubClient(github_token)
+        
+        # Format deviations
+        deviations = report.get('deviations', [])
+        commit_sha = args.head_sha or report.get('commit', {}).get('hash', '')
+        
+        comment_body = format_compliance_comment(
+            deviations=deviations,
+            commit_sha=commit_sha
+        )
+        
+        # Post or update comment
+        result = client.post_or_update_comment(
+            owner=owner,
+            repo=repo_name,
+            pr_number=int(pr_number),
+            body=comment_body
+        )
+        
+        print(f"\n✅ Posted compliance comment to PR #{pr_number}")
+        return True
+        
+    except Exception as e:
+        print(f"\n❌ Failed to post PR comment: {e}")
+        return False
+
+
+def create_github_check_run(report: dict, args) -> bool:
+    """
+    Create a GitHub check run for the commit.
+    
+    Returns True if successful, False otherwise.
+    """
+    github_token = os.environ.get('GITHUB_TOKEN')
+    if not github_token:
+        print("Warning: GITHUB_TOKEN not set, skipping check run")
+        return False
+    
+    # Get repo info
+    owner = args.repo_owner or os.environ.get('GITHUB_REPOSITORY_OWNER')
+    repo_name = args.repo_name
+    
+    if not repo_name:
+        full_repo = os.environ.get('GITHUB_REPOSITORY', '')
+        if '/' in full_repo:
+            owner, repo_name = full_repo.split('/', 1)
+    
+    # Get commit SHA
+    head_sha = args.head_sha or os.environ.get('GITHUB_SHA')
+    
+    if not head_sha and args.repo:
+        # Try to get from git
+        import subprocess
+        try:
+            result = subprocess.run(
+                ['git', 'rev-parse', args.commit or 'HEAD'],
+                cwd=args.repo,
+                capture_output=True,
+                text=True
+            )
+            if result.returncode == 0:
+                head_sha = result.stdout.strip()
+        except Exception:
+            pass
+    
+    if not all([owner, repo_name, head_sha]):
+        print("Warning: Missing info for check run (owner, repo, head_sha)")
+        return False
+    
+    try:
+        from app.services.github_client import GitHubClient, format_check_run_output
+        
+        client = GitHubClient(github_token)
+        deviations = report.get('deviations', [])
+        
+        # Determine conclusion
+        critical_count = sum(1 for d in deviations if d.get('severity', '').lower() == 'critical')
+        conclusion = 'failure' if critical_count > 0 else 'success'
+        
+        # Format output
+        output = format_check_run_output(
+            deviations=deviations,
+            files_analyzed=report.get('total_files', 0)
+        )
+        
+        # Create check run
+        result = client.create_check_run(
+            owner=owner,
+            repo=repo_name,
+            head_sha=head_sha,
+            name="Ethereum Compliance Check",
+            status="completed",
+            conclusion=conclusion,
+            output=output
+        )
+        
+        print(f"\n✅ Created check run (conclusion: {conclusion})")
+        return True
+        
+    except Exception as e:
+        print(f"\n❌ Failed to create check run: {e}")
+        return False
 
 
 def analyze_codebase(codebase_path: str, specs_dir: str, eips: Optional[List[int]], args) -> dict:
@@ -481,6 +670,190 @@ def analyze_git_range(repo_path: str, from_commit: str, to_commit: str, specs_di
     return result
 
 
+def run_mode_analysis(args, eips) -> dict:
+    """
+    Run analysis based on the selected mode.
+    
+    Modes:
+    - quick: Fast diff-based analysis
+    - deep: Comprehensive graph-based analysis
+    - both: Run quick first, then deep
+    """
+    import asyncio
+    import time
+    
+    mode = getattr(args, 'mode', 'quick')
+    
+    if not args.quiet:
+        print(f"\n📋 Analysis Mode: {mode.upper()}")
+        if mode == 'quick':
+            print("   ⚡ Fast diff-based analysis")
+        elif mode == 'deep':
+            print("   🔬 Comprehensive graph-based analysis")
+        else:
+            print("   ⚡ Quick analysis + 🔬 Deep analysis")
+        print("")
+    
+    # For PR-based analysis with GitHub integration
+    if args.pr_number and args.repo_owner and args.repo_name:
+        return asyncio.run(_run_pr_analysis(args, mode))
+    
+    # For local repository analysis
+    if args.codebase:
+        return analyze_codebase(args.codebase, args.specs, eips, args)
+    elif args.from_commit:
+        return analyze_git_range(args.repo, args.from_commit, args.to_commit, args.specs, eips, args)
+    else:
+        # Use enhanced analyzer for mode support
+        if mode in ['deep', 'both']:
+            return asyncio.run(_run_local_enhanced_analysis(args, mode, eips))
+        else:
+            return analyze_git_commit(args.repo, args.commit, args.specs, eips, args)
+
+
+async def _run_pr_analysis(args, mode: str) -> dict:
+    """Run PR-based analysis using the enhanced analyzer."""
+    from app.services.enhanced_compliance import run_dual_analysis, AnalysisMode
+    
+    github_token = os.environ.get('GITHUB_TOKEN')
+    run_deep = mode in ['deep', 'both']
+    
+    if args.verbose:
+        print(f"Analyzing PR #{args.pr_number} on {args.repo_owner}/{args.repo_name}")
+    
+    try:
+        # Try to use LLM analyzer if available
+        llm_analyzer = None
+        api_key = os.environ.get("OPENAI_API_KEY") or os.environ.get("API_KEY")
+        api_base = os.environ.get("OPENAI_API_BASE") or os.environ.get("API_BASE")
+        
+        if api_key and api_base:
+            try:
+                from app.services.spec_indexer import SpecificationIndexer
+                from app.services.llm_compliance import LLMComplianceAnalyzer
+                spec_indexer = SpecificationIndexer(api_key=api_key, api_base=api_base)
+                llm_analyzer = LLMComplianceAnalyzer(spec_indexer=spec_indexer, api_key=api_key, api_base=api_base)
+            except Exception as e:
+                if args.verbose:
+                    print(f"Note: LLM analyzer not available: {e}")
+        
+        results = await run_dual_analysis(
+            owner=args.repo_owner,
+            repo=args.repo_name,
+            pr_number=args.pr_number,
+            run_deep=run_deep,
+            github_token=github_token,
+            llm_analyzer=llm_analyzer
+        )
+        
+        # Convert to standard report format
+        report = {
+            'mode': mode,
+            'pr_number': args.pr_number,
+            'deviations': results.get('combined_deviations', []),
+            'total_deviations': len(results.get('combined_deviations', [])),
+            'critical_count': results.get('total_critical', 0),
+            'warning_count': results.get('total_warning', 0),
+            'compliance_passed': results.get('compliance_passed', True),
+            'quick_analysis': results.get('quick'),
+            'deep_analysis': results.get('deep')
+        }
+        
+        return report
+        
+    except Exception as e:
+        if args.verbose:
+            import traceback
+            traceback.print_exc()
+        return {
+            'mode': mode,
+            'error': str(e),
+            'deviations': [],
+            'total_deviations': 0
+        }
+
+
+async def _run_local_enhanced_analysis(args, mode: str, eips) -> dict:
+    """Run enhanced analysis on a local repository."""
+    import time
+    from pathlib import Path
+    
+    start_time = time.time()
+    repo_path = args.repo
+    
+    if args.verbose:
+        print(f"Running {mode} analysis on local repository: {repo_path}")
+    
+    # For deep analysis, we need to ingest into graph
+    try:
+        from app.services.code_graph_indexer import CodeGraphIndexer
+        from app.services.llm_compliance import LLMComplianceAnalyzer
+        
+        # Initialize components
+        indexer = CodeGraphIndexer()
+        
+        if args.verbose:
+            print("Indexing codebase into property graph...")
+        
+        # Index the codebase
+        indexer.index_codebase(repo_path)
+        entities = indexer.entities
+        
+        if args.verbose:
+            print(f"Found {len(entities)} entities")
+        
+        # Run LLM analysis on entities
+        deviations = []
+        llm_analyzer = None
+        api_key = os.environ.get("OPENAI_API_KEY") or os.environ.get("API_KEY")
+        api_base = os.environ.get("OPENAI_API_BASE") or os.environ.get("API_BASE")
+        
+        if api_key and api_base:
+            try:
+                from app.services.spec_indexer import SpecificationIndexer
+                from app.services.llm_compliance import LLMComplianceAnalyzer
+                spec_indexer = SpecificationIndexer(api_key=api_key, api_base=api_base)
+                llm_analyzer = LLMComplianceAnalyzer(spec_indexer=spec_indexer, code_indexer=indexer, api_key=api_key, api_base=api_base)
+                
+                for entity in entities[:50]:  # Limit for performance
+                    try:
+                        result = llm_analyzer.analyze_entity(entity)
+                        if result and result.deviations:
+                            deviations.extend([d.to_dict() for d in result.deviations])
+                    except Exception as e:
+                        if args.verbose:
+                            print(f"Warning: Failed to analyze entity: {e}")
+            except Exception as e:
+                if args.verbose:
+                    print(f"Note: LLM analyzer not available: {e}")
+        
+        duration = time.time() - start_time
+        
+        # Count by severity
+        critical = sum(1 for d in deviations if d.get('severity', '').lower() == 'critical')
+        warning = sum(1 for d in deviations if d.get('severity', '').lower() == 'warning')
+        
+        return {
+            'mode': mode,
+            'duration_seconds': duration,
+            'deviations': deviations,
+            'total_deviations': len(deviations),
+            'critical_count': critical,
+            'warning_count': warning,
+            'entities_analyzed': len(entities),
+            'total_entities': len(entities),
+            'compliance_passed': critical == 0
+        }
+        
+    except Exception as e:
+        if args.verbose:
+            import traceback
+            traceback.print_exc()
+        
+        # Fallback to basic analysis
+        return analyze_git_commit(repo_path, args.commit, args.specs, eips, args)
+
+
 def main():
     """Main entry point"""
     parser = create_parser()
@@ -491,6 +864,10 @@ def main():
         print("Error: Either --repo or --codebase must be specified")
         parser.print_help()
         sys.exit(1)
+    
+    # Validate GitHub options
+    if args.post_comment and not args.pr_number and not os.environ.get('GITHUB_REF', '').startswith('refs/pull/'):
+        print("Warning: --post-comment specified but no --pr-number provided and not in PR context")
     
     if not args.quiet:
         print_banner()
@@ -505,13 +882,8 @@ def main():
             sys.exit(1)
     
     try:
-        # Run analysis
-        if args.codebase:
-            report = analyze_codebase(args.codebase, args.specs, eips, args)
-        elif args.from_commit:
-            report = analyze_git_range(args.repo, args.from_commit, args.to_commit, args.specs, eips, args)
-        else:
-            report = analyze_git_commit(args.repo, args.commit, args.specs, eips, args)
+        # Run analysis based on mode
+        report = run_mode_analysis(args, eips)
         
         # Apply filters
         if args.severity:
@@ -537,6 +909,14 @@ def main():
             passed = len([d for d in report.get('deviations', []) if d.get('severity') == 'critical']) == 0
             if args.fail_on_warning:
                 passed = passed and len([d for d in report.get('deviations', []) if d.get('severity') == 'warning']) == 0
+        
+        # GitHub Integration: Post PR comment
+        if args.post_comment:
+            post_github_comment(report, args)
+        
+        # GitHub Integration: Create check run
+        if args.create_check_run:
+            create_github_check_run(report, args)
         
         # Exit with appropriate status
         if args.fail_on_critical or args.fail_on_warning or args.threshold > 0:

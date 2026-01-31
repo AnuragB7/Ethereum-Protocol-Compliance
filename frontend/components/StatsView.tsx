@@ -1,8 +1,8 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
-import { getStatistics } from '../lib/api';
-import { FileCode, GitBranch, Database, Code2 } from 'lucide-react';
+import { getStatistics, listPRGraphs, loadPRGraphToMain, deletePRGraph, PRGraphMetadata } from '../lib/api';
+import { FileCode, GitBranch, Database, Code2, RefreshCw, Trash2, Download, GitPullRequest, ExternalLink } from 'lucide-react';
 import dynamic from 'next/dynamic';
 
 // Dynamically import GraphVisualization to avoid SSR issues with vis-network
@@ -27,12 +27,16 @@ interface Statistics {
 export default function StatsView() {
   const [stats, setStats] = useState<Statistics | null>(null);
   const [loading, setLoading] = useState(true);
+  const [prGraphs, setPrGraphs] = useState<PRGraphMetadata[]>([]);
+  const [loadingPrGraphs, setLoadingPrGraphs] = useState(false);
 
   useEffect(() => {
     loadStats();
+    loadPrGraphs();
   }, []);
 
   const loadStats = async () => {
+    setLoading(true);
     try {
       const data = await getStatistics();
       setStats(data);
@@ -40,6 +44,39 @@ export default function StatsView() {
       console.error('Failed to load statistics:', error);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const loadPrGraphs = async () => {
+    setLoadingPrGraphs(true);
+    try {
+      const data = await listPRGraphs();
+      setPrGraphs(data.graphs || []);
+    } catch (error) {
+      console.error('Failed to load PR graphs:', error);
+    } finally {
+      setLoadingPrGraphs(false);
+    }
+  };
+
+  const handleLoadPrGraph = async (prId: string) => {
+    try {
+      await loadPRGraphToMain(prId);
+      // Refresh stats after loading
+      await loadStats();
+    } catch (error) {
+      console.error('Failed to load PR graph:', error);
+    }
+  };
+
+  const handleDeletePrGraph = async (prId: string) => {
+    if (!confirm('Delete this PR analysis graph?')) return;
+    
+    try {
+      await deletePRGraph(prId);
+      await loadPrGraphs();
+    } catch (error) {
+      console.error('Failed to delete PR graph:', error);
     }
   };
 
@@ -61,7 +98,17 @@ export default function StatsView() {
 
   return (
     <div className="max-w-7xl mx-auto p-6">
-      <h2 className="text-3xl font-bold mb-6 text-gray-800">Codebase Statistics</h2>
+      <div className="flex items-center justify-between mb-6">
+        <h2 className="text-3xl font-bold text-gray-800">Codebase Statistics</h2>
+        <button
+          onClick={() => { loadStats(); loadPrGraphs(); }}
+          disabled={loading}
+          className="px-4 py-2 bg-gray-100 hover:bg-gray-200 rounded-lg flex items-center gap-2 transition disabled:opacity-50"
+        >
+          <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+          Refresh
+        </button>
+      </div>
 
       {/* Summary cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
@@ -141,6 +188,69 @@ export default function StatsView() {
           ))}
         </div>
       </div>
+
+      {/* PR Analysis Graphs */}
+      {prGraphs.length > 0 && (
+        <div className="mt-6 bg-white p-6 rounded-lg shadow-lg">
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-2">
+              <GitPullRequest className="w-5 h-5 text-purple-600" />
+              <h3 className="text-xl font-bold text-gray-800">PR Analysis Graphs</h3>
+            </div>
+            <span className="text-sm text-gray-500">{prGraphs.length} saved</span>
+          </div>
+          <p className="text-sm text-gray-600 mb-4">
+            These are code graphs from PR deep analysis. Load one to visualize it below.
+          </p>
+          <div className="space-y-3">
+            {prGraphs.map((graph) => (
+              <div key={graph.id} className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
+                <div className="flex-1">
+                  <div className="flex items-center gap-2">
+                    <span className="font-medium">{graph.owner}/{graph.repo}</span>
+                    <span className="text-purple-600">#{graph.pr_number}</span>
+                  </div>
+                  <div className="text-sm text-gray-500 mt-1">
+                    <span>Commit: {graph.commit_sha?.substring(0, 7)}</span>
+                    <span className="mx-2">•</span>
+                    <span>{graph.stats?.total_entities || 0} entities</span>
+                    <span className="mx-2">•</span>
+                    <span>{graph.stats?.total_relationships || 0} relationships</span>
+                    <span className="mx-2">•</span>
+                    <span>{new Date(graph.timestamp).toLocaleDateString()}</span>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <a
+                    href={`https://github.com/${graph.owner}/${graph.repo}/pull/${graph.pr_number}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="p-2 text-gray-500 hover:text-purple-600 transition"
+                    title="View PR on GitHub"
+                  >
+                    <ExternalLink className="w-4 h-4" />
+                  </a>
+                  <button
+                    onClick={() => handleLoadPrGraph(graph.id)}
+                    className="px-3 py-1.5 bg-purple-600 text-white rounded hover:bg-purple-700 transition flex items-center gap-1 text-sm"
+                    title="Load this graph for visualization"
+                  >
+                    <Download className="w-4 h-4" />
+                    Load
+                  </button>
+                  <button
+                    onClick={() => handleDeletePrGraph(graph.id)}
+                    className="p-2 text-gray-500 hover:text-red-600 transition"
+                    title="Delete this graph"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Graph Visualization */}
       <div className="mt-6">

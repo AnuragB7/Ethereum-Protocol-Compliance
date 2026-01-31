@@ -383,8 +383,7 @@ class GitAnalyzer:
 class GitWebhookHandler:
     """Handles incoming Git webhooks from various providers"""
     
-    def __init__(self, git_analyzer: GitAnalyzer, github_secret: str = None, gitlab_secret: str = None):
-        self.git_analyzer = git_analyzer
+    def __init__(self, github_secret: str = None, gitlab_secret: str = None):
         self.github_secret = github_secret
         self.gitlab_secret = gitlab_secret
     
@@ -498,19 +497,32 @@ class GitWebhookHandler:
         
         return webhook
     
-    async def handle_github_push(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+    async def handle_github_push(
+        self, 
+        payload: Dict[str, Any],
+        git_analyzer: 'GitAnalyzer' = None,
+        llm_analyzer = None,
+        github_client = None
+    ) -> Dict[str, Any]:
         """
         Handle a GitHub push webhook
         
         Args:
             payload: GitHub webhook payload
+            git_analyzer: GitAnalyzer instance for analyzing commits
+            llm_analyzer: LLMComplianceAnalyzer instance for LLM-based analysis
+            github_client: GitHubClient instance for posting comments
             
         Returns:
             Compliance analysis results
         """
+        import logging
+        logger = logging.getLogger(__name__)
+        
         webhook = self.parse_github_webhook(payload, 'push')
         
-        # Get the compare URL to fetch the diff
+        # Get commit info
+        head_commit = payload.get('head_commit', {})
         compare_url = payload.get('compare', '')
         
         results = {
@@ -523,39 +535,96 @@ class GitWebhookHandler:
             'compliance_passed': True
         }
         
-        # If we have a local repo path, analyze locally
-        # Otherwise, we'll analyze based on commit data
-        
-        # Analyze each commit's changes (from webhook data)
+        # Fetch and analyze the diff if we have a compare URL
         all_deviations = []
-        for commit in webhook.commits:
-            # For each file changed, we might want to fetch and analyze
-            # This is a simplified version - in production, you'd fetch actual file content
-            for file_path in commit.files_changed:
-                if self._is_analyzable_file(file_path):
-                    # Note: In production, fetch actual diff content
-                    pass
         
-        results['deviations'] = [d.to_dict() for d in all_deviations]
+        if compare_url and llm_analyzer:
+            try:
+                # Fetch diff from compare URL
+                parts = webhook.repository.split('/')
+                if len(parts) == 2:
+                    owner, repo = parts
+                    
+                    # Get the diff for the push
+                    if github_client:
+                        # Use compare API to get diff
+                        before = payload.get('before', '')[:7]
+                        after = payload.get('after', '')[:7]
+                        if before and after and before != '0000000':
+                            try:
+                                compare_endpoint = f"/repos/{owner}/{repo}/compare/{before}...{after}"
+                                compare_data = github_client._make_request('GET', compare_endpoint)
+                                
+                                # Get the diff content
+                                if 'diff_url' in compare_data:
+                                    import urllib.request
+                                    req = urllib.request.Request(
+                                        compare_data['diff_url'],
+                                        headers={'User-Agent': 'Ethereum-Compliance-Checker'}
+                                    )
+                                    with urllib.request.urlopen(req, timeout=30) as resp:
+                                        diff_content = resp.read().decode('utf-8')
+                                    
+                                    # Analyze diff with LLM
+                                    llm_report = llm_analyzer.analyze_diff(diff_content)
+                                    if llm_report and llm_report.deviations:
+                                        all_deviations.extend([d.to_dict() for d in llm_report.deviations])
+                            except Exception as e:
+                                logger.warning(f"Failed to fetch/analyze diff: {e}")
+            except Exception as e:
+                logger.error(f"Error analyzing push: {e}")
+                results['error'] = str(e)
+        
+        # Convert deviations
+        results['deviations'] = all_deviations
         results['total_deviations'] = len(all_deviations)
-        results['critical_count'] = len([d for d in all_deviations if d.rule.severity == 'critical'])
+        results['critical_count'] = sum(1 for d in all_deviations if d.get('severity', '').lower() == 'critical')
+        results['warning_count'] = sum(1 for d in all_deviations if d.get('severity', '').lower() == 'warning')
         results['compliance_passed'] = results['critical_count'] == 0
         
         return results
     
-    async def handle_github_pull_request(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+    async def handle_github_pull_request(
+        self, 
+        payload: Dict[str, Any],
+        git_analyzer: 'GitAnalyzer' = None,
+        llm_analyzer = None,
+        github_client = None,
+        post_comment: bool = True,
+        indexer = None,
+        run_deep: bool = False
+    ) -> Dict[str, Any]:
         """
-        Handle a GitHub pull request webhook
+        Handle a GitHub pull request webhook with dual-mode analysis.
         
         Args:
             payload: GitHub webhook payload
+            git_analyzer: GitAnalyzer instance
+            llm_analyzer: LLMComplianceAnalyzer instance for LLM-based analysis
+            github_client: GitHubClient instance for posting comments
+            post_comment: Whether to post results as PR comment
+            indexer: CodeGraphIndexer for deep analysis
+            run_deep: Whether to run deep (graph-based) analysis
             
         Returns:
-            Compliance analysis results
+            Compliance analysis results with mode information
         """
+        import logging
+        import os
+        logger = logging.getLogger(__name__)
+        
         webhook = self.parse_github_webhook(payload, 'pull_request')
         
         action = payload.get('action', '')
+        pr_data = payload.get('pull_request', {})
+        head_sha = pr_data.get('head', {}).get('sha', '')
+        labels = [l.get('name', '') for l in pr_data.get('labels', [])]
+        
+        # Check for deep analysis label
+        deep_analysis_labels = ['compliance-deep-check', 'deep-analysis', 'thorough-check']
+        if any(label in deep_analysis_labels for label in labels):
+            run_deep = True
+            logger.info(f"Deep analysis enabled via PR label")
         
         results = {
             'provider': 'github',
@@ -564,28 +633,136 @@ class GitWebhookHandler:
             'repository': webhook.repository,
             'pr_number': webhook.pull_request.number if webhook.pull_request else 0,
             'pr_title': webhook.pull_request.title if webhook.pull_request else '',
+            'head_sha': head_sha,
+            'analysis_mode': 'deep' if run_deep else 'quick',
             'deviations': [],
             'compliance_passed': True
         }
         
         # Only analyze on opened, synchronize, or reopened
-        if action in ['opened', 'synchronize', 'reopened']:
-            if webhook.pull_request:
-                # Parse repo owner and name
-                parts = webhook.repository.split('/')
-                if len(parts) == 2:
-                    owner, repo = parts
-                    try:
-                        analysis = self.git_analyzer.analyze_pr_from_github(
-                            owner, repo, webhook.pull_request.number
+        if action not in ['opened', 'synchronize', 'reopened']:
+            results['status'] = 'skipped'
+            results['message'] = f'Action "{action}" does not trigger analysis'
+            return results
+        
+        if not webhook.pull_request:
+            results['error'] = 'No pull request data in webhook'
+            return results
+        
+        # Parse repo owner and name
+        parts = webhook.repository.split('/')
+        if len(parts) != 2:
+            results['error'] = f'Invalid repository format: {webhook.repository}'
+            return results
+        
+        owner, repo = parts
+        pr_number = webhook.pull_request.number
+        github_token = os.getenv('GITHUB_TOKEN')
+        
+        try:
+            # Create check run if we have a GitHub client
+            check_run_id = None
+            if github_client and head_sha:
+                try:
+                    from app.services.github_client import CheckRunOutput
+                    check_run = github_client.create_check_run(
+                        owner, repo, head_sha,
+                        name="Ethereum Compliance Check",
+                        status="in_progress"
+                    )
+                    check_run_id = check_run.get('id')
+                    logger.info(f"Created check run {check_run_id}")
+                except Exception as e:
+                    logger.warning(f"Failed to create check run: {e}")
+            
+            # Use enhanced dual-mode analyzer
+            from app.services.enhanced_compliance import run_dual_analysis
+            
+            analysis_results = await run_dual_analysis(
+                owner=owner,
+                repo=repo,
+                pr_number=pr_number,
+                run_deep=run_deep,
+                github_token=github_token,
+                llm_analyzer=llm_analyzer,
+                indexer=indexer,
+                github_client=github_client
+            )
+            
+            # Extract results
+            all_deviations = analysis_results.get('combined_deviations', [])
+            results['deviations'] = all_deviations
+            results['total_deviations'] = len(all_deviations)
+            results['critical_count'] = analysis_results.get('total_critical', 0)
+            results['warning_count'] = analysis_results.get('total_warning', 0)
+            results['compliance_passed'] = analysis_results.get('compliance_passed', True)
+            results['quick_analysis'] = analysis_results.get('quick')
+            results['deep_analysis'] = analysis_results.get('deep')
+            
+            # Post comment to PR if enabled
+            if post_comment and github_client:
+                try:
+                    from app.services.github_client import format_dual_mode_comment
+                    comment_body = format_dual_mode_comment(
+                        quick_result=analysis_results.get('quick'),
+                        deep_result=analysis_results.get('deep'),
+                        commit_sha=head_sha,
+                        pr_title=webhook.pull_request.title
+                    )
+                    github_client.post_or_update_comment(owner, repo, pr_number, comment_body)
+                    results['comment_posted'] = True
+                    logger.info(f"Posted compliance comment on PR #{pr_number}")
+                except Exception as e:
+                    logger.error(f"Failed to post PR comment: {e}")
+                    results['comment_error'] = str(e)
+            
+            # Update check run with results
+            if check_run_id and github_client:
+                try:
+                    from app.services.github_client import format_check_run_output
+                    conclusion = 'failure' if results.get('critical_count', 0) > 0 else 'success'
+                    output = format_check_run_output(
+                        deviations=all_deviations,
+                        files_analyzed=analysis_results.get('quick', {}).get('files_analyzed', 0)
+                    )
+                    github_client.update_check_run(
+                        owner, repo, check_run_id,
+                        status='completed',
+                        conclusion=conclusion,
+                        output=output
+                    )
+                    results['check_run_completed'] = True
+                except Exception as e:
+                    logger.warning(f"Failed to update check run: {e}")
+        
+        except Exception as e:
+            logger.error(f"Error handling PR webhook: {e}")
+            results['error'] = str(e)
+            
+            # Try to update check run with failure
+            if check_run_id and github_client:
+                try:
+                    from app.services.github_client import CheckRunOutput
+                    github_client.update_check_run(
+                        owner, repo, check_run_id,
+                        status='completed',
+                        conclusion='failure',
+                        output=CheckRunOutput(
+                            title="Analysis Failed",
+                            summary=f"Error: {str(e)}"
                         )
-                        results.update(analysis)
-                    except Exception as e:
-                        results['error'] = str(e)
+                    )
+                except:
+                    pass
         
         return results
     
-    async def handle_gitlab_push(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+    async def handle_gitlab_push(
+        self, 
+        payload: Dict[str, Any],
+        git_analyzer: 'GitAnalyzer' = None,
+        llm_analyzer = None
+    ) -> Dict[str, Any]:
         """Handle a GitLab push webhook"""
         webhook = self.parse_gitlab_webhook(payload)
         
@@ -599,7 +776,12 @@ class GitWebhookHandler:
             'compliance_passed': True
         }
     
-    async def handle_gitlab_merge_request(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+    async def handle_gitlab_merge_request(
+        self, 
+        payload: Dict[str, Any],
+        git_analyzer: 'GitAnalyzer' = None,
+        llm_analyzer = None
+    ) -> Dict[str, Any]:
         """Handle a GitLab merge request webhook"""
         webhook = self.parse_gitlab_webhook(payload)
         
