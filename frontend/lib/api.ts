@@ -49,9 +49,9 @@ export const uploadCodebase = async (file: File) => {
   return response.data;
 };
 
-// Upload folder
+// Upload folder (uses extended timeout for large codebases)
 export const uploadFolder = async (path: string) => {
-  const response = await api.post('/api/upload-folder', null, {
+  const response = await apiLongRunning.post('/api/upload-folder', null, {
     params: { codebase_path: path },
   });
   return response.data;
@@ -142,6 +142,17 @@ export const getCallChain = async (functionName: string, depth: number = 3) => {
 
 // Get graph data
 export const getGraphData = async () => {
+  const response = await api.get('/api/graph-data');
+  return response.data;
+};
+
+// Get graph data from specific storage (local or PR)
+export const getGraphDataFromStorage = async (source: 'local' | 'pr', prGraphId?: string) => {
+  if (source === 'pr' && prGraphId) {
+    const response = await api.get(`/api/pr-analysis/graphs/${prGraphId}/data`);
+    return response.data;
+  }
+  // Default to local graph_storage
   const response = await api.get('/api/graph-data');
   return response.data;
 };
@@ -361,10 +372,15 @@ export const searchSpecsByEIP = async (eipNumber: string, topK: number = 10) => 
 
 // Run LLM compliance check on codebase
 // Uses extended timeout since compliance checks can take several minutes
-export const runLLMCompliance = async (maxEntities: number = 20, specTopK: number = 5) => {
+export const runLLMCompliance = async (
+  maxEntities: number = 20, 
+  specTopK: number = 5, 
+  codebasePath?: string
+) => {
   const response = await apiLongRunning.post('/api/llm-compliance/run-compliance', {
     max_entities: maxEntities,
     spec_top_k: specTopK,
+    codebase_path: codebasePath || null,
   });
   return response.data;
 };

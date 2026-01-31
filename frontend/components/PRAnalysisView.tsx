@@ -22,7 +22,7 @@ import {
   BarChart3,
   GitBranch,
   Download,
-  FolderCode,
+  Folder,
   Upload
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
@@ -31,7 +31,6 @@ import {
   parsePRUrl, 
   PRAnalysisResult, 
   getSpecStats, 
-  loadPRGraphToMain,
   startPRAnalysisAsync,
   getJobStatus,
   JobStatusResponse,
@@ -66,22 +65,7 @@ interface GraphStatsProps {
 }
 
 function GraphStatsCard({ stats, graphId, graphPersisted }: GraphStatsProps) {
-  const [loadingToMain, setLoadingToMain] = useState(false);
-  const [loadedToMain, setLoadedToMain] = useState(false);
-
-  const handleLoadToMain = async () => {
-    if (!graphId) return;
-    
-    setLoadingToMain(true);
-    try {
-      await loadPRGraphToMain(graphId);
-      setLoadedToMain(true);
-    } catch (err) {
-      console.error('Failed to load graph to main:', err);
-    } finally {
-      setLoadingToMain(false);
-    }
-  };
+  // Note: PR graphs are kept separate in pr_graph_storage, no longer copied to main storage
 
   return (
     <div className="bg-white rounded-lg shadow p-6">
@@ -91,32 +75,10 @@ function GraphStatsCard({ stats, graphId, graphPersisted }: GraphStatsProps) {
           <h3 className="text-lg font-semibold">Code Graph Statistics</h3>
         </div>
         {graphPersisted && graphId && (
-          <button
-            onClick={handleLoadToMain}
-            disabled={loadingToMain || loadedToMain}
-            className={`px-4 py-2 rounded-lg flex items-center gap-2 text-sm transition ${
-              loadedToMain 
-                ? 'bg-green-100 text-green-700 cursor-default'
-                : 'bg-purple-600 text-white hover:bg-purple-700 disabled:bg-gray-400'
-            }`}
-          >
-            {loadingToMain ? (
-              <>
-                <Loader className="w-4 h-4 animate-spin" />
-                Loading...
-              </>
-            ) : loadedToMain ? (
-              <>
-                <CheckCircle className="w-4 h-4" />
-                Loaded to Statistics
-              </>
-            ) : (
-              <>
-                <Download className="w-4 h-4" />
-                Load to Statistics Tab
-              </>
-            )}
-          </button>
+          <span className="text-sm text-green-600 flex items-center gap-1">
+            <CheckCircle className="w-4 h-4" />
+            Saved to PR Graph Storage
+          </span>
         )}
       </div>
       
@@ -227,6 +189,10 @@ export default function PRAnalysisView() {
   // Spec status
   const [specsIndexed, setSpecsIndexed] = useState<boolean | null>(null);
   const [specCount, setSpecCount] = useState(0);
+  
+  // Folder path analysis
+  const [folderPath, setFolderPath] = useState('');
+  const [useIndexed, setUseIndexed] = useState(true); // true = use indexed codebase, false = use folder path
   
   // Check spec status on mount
   useEffect(() => {
@@ -374,12 +340,22 @@ export default function PRAnalysisView() {
     setResult(null);
     
     try {
-      const response = await runLLMCompliance(uploadedMaxEntities, 5);
+      // Pass folder path if using folder mode, otherwise null for indexed codebase
+      const codebasePath = useIndexed ? undefined : (folderPath.trim() || undefined);
+      
+      if (!useIndexed && !codebasePath) {
+        setError('Please enter a folder path');
+        setUploadedAnalysisLoading(false);
+        return;
+      }
+      
+      const response = await runLLMCompliance(uploadedMaxEntities, 5, codebasePath);
       
       // Convert to PRAnalysisResult format for consistent display
       const report = response.report;
+      const sourceLabel = codebasePath ? `Local Folder: ${codebasePath}` : 'Indexed Codebase';
       const convertedResult: PRAnalysisResult = {
-        pr: 'Uploaded Codebase',
+        pr: sourceLabel,
         timestamp: report.timestamp,
         deep: {
           mode: 'deep',
@@ -527,12 +503,63 @@ export default function PRAnalysisView() {
       {analysisSource === 'uploaded' && (
         <div className="bg-white rounded-lg shadow p-6 space-y-4">
           <div>
-            <h3 className="text-lg font-semibold text-gray-800 mb-2">Analyze Uploaded Codebase</h3>
+            <h3 className="text-lg font-semibold text-gray-800 mb-2">Analyze Codebase</h3>
             <p className="text-sm text-gray-600 mb-4">
-              Run LLM-powered compliance analysis on the code you uploaded via the Upload tab.
-              This analyzes the indexed code graph against Ethereum specifications.
+              Run LLM-powered compliance analysis on code against Ethereum specifications.
             </p>
           </div>
+          
+          {/* Source Selection */}
+          <div className="flex items-center gap-4 p-3 bg-gray-50 rounded-lg">
+            <span className="text-sm font-medium text-gray-700">Source:</span>
+            <button
+              onClick={() => setUseIndexed(true)}
+              className={`px-3 py-1.5 rounded-lg text-sm transition ${
+                useIndexed
+                  ? 'bg-purple-600 text-white'
+                  : 'bg-white text-gray-700 border border-gray-300 hover:bg-gray-100'
+              }`}
+            >
+              <Database className="w-4 h-4 inline mr-1" />
+              Indexed Codebase
+            </button>
+            <button
+              onClick={() => setUseIndexed(false)}
+              className={`px-3 py-1.5 rounded-lg text-sm transition ${
+                !useIndexed
+                  ? 'bg-purple-600 text-white'
+                  : 'bg-white text-gray-700 border border-gray-300 hover:bg-gray-100'
+              }`}
+            >
+              <Folder className="w-4 h-4 inline mr-1" />
+              Local Folder Path
+            </button>
+          </div>
+          
+          {/* Folder Path Input (when not using indexed) */}
+          {!useIndexed && (
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-gray-700">
+                Local Folder Path:
+              </label>
+              <input
+                type="text"
+                value={folderPath}
+                onChange={(e) => setFolderPath(e.target.value)}
+                placeholder="/path/to/your/codebase (e.g., ~/projects/go-ethereum)"
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 font-mono text-sm"
+              />
+              <p className="text-xs text-gray-500">
+                Enter the absolute path to a local folder on the server. The folder will be parsed and analyzed without being saved to the graph storage.
+              </p>
+            </div>
+          )}
+          
+          {useIndexed && (
+            <p className="text-sm text-gray-600 p-3 bg-blue-50 rounded-lg">
+              Using the codebase you uploaded via the Upload tab (currently indexed).
+            </p>
+          )}
           
           <div className="flex items-center gap-4">
             <label className="text-sm font-medium text-gray-700">
@@ -553,7 +580,7 @@ export default function PRAnalysisView() {
           
           <button
             onClick={handleUploadedCodeAnalysis}
-            disabled={uploadedAnalysisLoading || !specsIndexed}
+            disabled={uploadedAnalysisLoading || !specsIndexed || (!useIndexed && !folderPath.trim())}
             className="w-full py-3 bg-purple-600 text-white rounded-lg font-medium hover:bg-purple-700 transition disabled:bg-gray-400 disabled:cursor-not-allowed flex items-center justify-center gap-2"
           >
             {uploadedAnalysisLoading ? (

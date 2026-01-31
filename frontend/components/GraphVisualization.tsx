@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useEffect, useRef, useState } from 'react';
-import { getGraphData } from '../lib/api';
+import { getGraphData, getGraphDataFromStorage } from '../lib/api';
 
 declare global {
   interface Window {
@@ -47,18 +47,40 @@ interface NodeInfo {
 
 interface GraphVisualizationProps {
   autoLoad?: boolean;
+  storageSource?: 'local' | 'pr';  // Which storage to load from
+  prGraphId?: string;  // PR graph ID if loading from pr_graph_storage
+  loadTrigger?: number;  // Incremented to trigger a reload
 }
 
-export default function GraphVisualization({ autoLoad = false }: GraphVisualizationProps) {
+// Maximum nodes to render for performance
+const MAX_NODES_TO_RENDER = 500;
+
+export default function GraphVisualization({ 
+  autoLoad = false, 
+  storageSource = 'local',
+  prGraphId,
+  loadTrigger = 0
+}: GraphVisualizationProps) {
   const networkRef = useRef<HTMLDivElement>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [graphStats, setGraphStats] = useState<{ nodes: number; edges: number } | null>(null);
+  const [graphStats, setGraphStats] = useState<{ nodes: number; edges: number; totalNodes?: number; totalEdges?: number } | null>(null);
   const [selectedNode, setSelectedNode] = useState<NodeInfo | null>(null);
   const [network, setNetwork] = useState<any>(null);
   const [physicsEnabled, setPhysicsEnabled] = useState(true);
   const [visLoaded, setVisLoaded] = useState(false);
-  const hasAutoLoaded = useRef(false);
+  const [nodeLimit, setNodeLimit] = useState(MAX_NODES_TO_RENDER);
+  const [fullGraphData, setFullGraphData] = useState<GraphData | null>(null);
+  
+  // Use refs to store current prop values for use in async functions
+  const storageSourceRef = useRef(storageSource);
+  const prGraphIdRef = useRef(prGraphId);
+  
+  // Keep refs updated
+  useEffect(() => {
+    storageSourceRef.current = storageSource;
+    prGraphIdRef.current = prGraphId;
+  }, [storageSource, prGraphId]);
 
   // Load vis-network library
   useEffect(() => {
@@ -73,13 +95,54 @@ export default function GraphVisualization({ autoLoad = false }: GraphVisualizat
     }
   }, []);
 
-  // Auto-load graph when prop changes
+  // Auto-load graph when loadTrigger changes (triggered by parent)
   useEffect(() => {
-    if (autoLoad && visLoaded && networkRef.current && !hasAutoLoaded.current) {
-      hasAutoLoaded.current = true;
+    if (loadTrigger > 0 && visLoaded && networkRef.current) {
       loadGraph();
     }
-  }, [autoLoad, visLoaded]);
+  }, [loadTrigger, visLoaded]);
+
+  // Helper function to limit graph data for performance
+  const limitGraphData = (data: GraphData, limit: number): GraphData => {
+    if (data.nodes.length <= limit) {
+      return data;
+    }
+
+    // Take the first N nodes (could also prioritize by type/importance)
+    const limitedNodes = data.nodes.slice(0, limit);
+    const limitedNodeIds = new Set(limitedNodes.map(n => n.id));
+
+    // Only include edges where both source and target are in the limited set
+    const limitedEdges = data.edges.filter(edge => {
+      const from = edge.source || edge.from;
+      const to = edge.target || edge.to;
+      return from && to && limitedNodeIds.has(from) && limitedNodeIds.has(to);
+    });
+
+    return { nodes: limitedNodes, edges: limitedEdges };
+  };
+
+  // Re-render with new limit
+  const updateNodeLimit = (newLimit: number) => {
+    setNodeLimit(newLimit);
+    if (fullGraphData) {
+      const limitedData = limitGraphData(fullGraphData, newLimit);
+      const validNodeIds = new Set(fullGraphData.nodes.map(node => node.id));
+      const validEdgeCount = fullGraphData.edges.filter((edge) => {
+        const from = edge.source || edge.from;
+        const to = edge.target || edge.to;
+        return from && to && validNodeIds.has(from) && validNodeIds.has(to);
+      }).length;
+      
+      setGraphStats({ 
+        nodes: limitedData.nodes.length, 
+        edges: limitedData.edges.length,
+        totalNodes: fullGraphData.nodes.length,
+        totalEdges: validEdgeCount
+      });
+      createNetwork(limitedData);
+    }
+  };
 
   const loadGraph = async () => {
     if (!visLoaded || !networkRef.current) return;
@@ -88,14 +151,42 @@ export default function GraphVisualization({ autoLoad = false }: GraphVisualizat
     setError(null);
 
     try {
-      const data: GraphData = await getGraphData();
+      // Load from appropriate storage based on refs (to get latest values)
+      const currentSource = storageSourceRef.current;
+      const currentPrId = prGraphIdRef.current;
+      
+      let data: GraphData;
+      if (currentSource === 'pr' && currentPrId) {
+        data = await getGraphDataFromStorage('pr', currentPrId);
+      } else {
+        data = await getGraphData(); // Default: local graph_storage
+      }
 
       if (!data.nodes || !data.edges) {
         throw new Error('Invalid graph data received');
       }
 
-      setGraphStats({ nodes: data.nodes.length, edges: data.edges.length });
-      createNetwork(data);
+      // Store full graph data for later use
+      setFullGraphData(data);
+
+      // Create valid edge count for stats
+      const validNodeIds = new Set(data.nodes.map(node => node.id));
+      const validEdgeCount = data.edges.filter((edge) => {
+        const from = edge.source || edge.from;
+        const to = edge.target || edge.to;
+        return from && to && validNodeIds.has(from) && validNodeIds.has(to);
+      }).length;
+
+      // Limit nodes for rendering performance
+      const limitedData = limitGraphData(data, nodeLimit);
+      
+      setGraphStats({ 
+        nodes: limitedData.nodes.length, 
+        edges: limitedData.edges.length,
+        totalNodes: data.nodes.length,
+        totalEdges: validEdgeCount
+      });
+      createNetwork(limitedData);
     } catch (err: any) {
       setError(err.message || 'Failed to load graph data');
       console.error('Error loading graph:', err);
@@ -106,6 +197,9 @@ export default function GraphVisualization({ autoLoad = false }: GraphVisualizat
 
   const createNetwork = (data: GraphData) => {
     if (!networkRef.current || !window.vis) return;
+
+    // Create a set of valid node IDs for fast lookup
+    const validNodeIds = new Set(data.nodes.map(node => node.id));
 
     // Prepare nodes
     const nodesArray = data.nodes.map((node) => {
@@ -148,19 +242,38 @@ export default function GraphVisualization({ autoLoad = false }: GraphVisualizat
         shape: shape,
         size: size,
         font: { size: 12, color: '#333' },
-        ...node,
+        // Store original node data for click handler
+        name: node.name,
+        type: node.type,
+        language: node.language,
+        file_path: node.file_path,
+        line_start: node.line_start,
+        line_end: node.line_end,
       };
     });
 
-    // Prepare edges
-    const edgesArray = data.edges.map((edge) => ({
-      from: edge.source || edge.from,
-      to: edge.target || edge.to,
-      label: edge.relationship || edge.label || '',
-      arrows: 'to',
-      color: { color: '#848484', highlight: '#667eea' },
-      font: { size: 10, color: '#666', strokeWidth: 0 },
-    }));
+    // Prepare edges - FILTER OUT invalid edges that reference non-existent nodes
+    const edgesArray = data.edges
+      .map((edge) => ({
+        from: edge.source || edge.from,
+        to: edge.target || edge.to,
+        label: edge.relationship || edge.label || '',
+        arrows: 'to',
+        color: { color: '#848484', highlight: '#667eea' },
+        font: { size: 10, color: '#666', strokeWidth: 0 },
+      }))
+      .filter((edge) => {
+        // Only include edges where both source and target nodes exist
+        const fromExists = edge.from && validNodeIds.has(edge.from);
+        const toExists = edge.to && validNodeIds.has(edge.to);
+        return fromExists && toExists;
+      });
+
+    // Log how many edges were filtered out
+    const filteredCount = data.edges.length - edgesArray.length;
+    if (filteredCount > 0) {
+      console.log(`Filtered out ${filteredCount} invalid edges (orphan references)`);
+    }
 
     const nodes = new window.vis.DataSet(nodesArray);
     const edges = new window.vis.DataSet(edgesArray);
@@ -289,15 +402,46 @@ export default function GraphVisualization({ autoLoad = false }: GraphVisualizat
       )}
 
       {graphStats && (
-        <div className="mb-4 grid grid-cols-2 md:grid-cols-5 gap-3">
-          <div className="bg-gradient-to-r from-indigo-500 to-purple-600 text-white p-3 rounded-lg text-center">
-            <div className="text-2xl font-bold">{graphStats.nodes}</div>
-            <div className="text-sm opacity-90">Nodes</div>
+        <div className="mb-4">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
+            <div className="bg-gradient-to-r from-indigo-500 to-purple-600 text-white p-3 rounded-lg text-center">
+              <div className="text-2xl font-bold">{graphStats.nodes}</div>
+              <div className="text-sm opacity-90">Rendered Nodes</div>
+            </div>
+            <div className="bg-gradient-to-r from-indigo-500 to-purple-600 text-white p-3 rounded-lg text-center">
+              <div className="text-2xl font-bold">{graphStats.edges}</div>
+              <div className="text-sm opacity-90">Rendered Edges</div>
+            </div>
+            {graphStats.totalNodes && graphStats.totalNodes > graphStats.nodes && (
+              <>
+                <div className="bg-gray-100 text-gray-700 p-3 rounded-lg text-center">
+                  <div className="text-2xl font-bold">{graphStats.totalNodes.toLocaleString()}</div>
+                  <div className="text-sm">Total Nodes</div>
+                </div>
+                <div className="bg-gray-100 text-gray-700 p-3 rounded-lg text-center">
+                  <div className="text-2xl font-bold">{graphStats.totalEdges?.toLocaleString()}</div>
+                  <div className="text-sm">Total Edges</div>
+                </div>
+              </>
+            )}
           </div>
-          <div className="bg-gradient-to-r from-indigo-500 to-purple-600 text-white p-3 rounded-lg text-center">
-            <div className="text-2xl font-bold">{graphStats.edges}</div>
-            <div className="text-sm opacity-90">Edges</div>
-          </div>
+          {graphStats.totalNodes && graphStats.totalNodes > MAX_NODES_TO_RENDER && (
+            <div className="flex items-center gap-3 p-3 bg-yellow-50 border border-yellow-200 rounded-lg text-sm">
+              <span className="text-yellow-700">Large graph detected. Showing first</span>
+              <select 
+                value={nodeLimit}
+                onChange={(e) => updateNodeLimit(Number(e.target.value))}
+                className="border rounded px-2 py-1 text-gray-700"
+              >
+                <option value={100}>100</option>
+                <option value={250}>250</option>
+                <option value={500}>500</option>
+                <option value={1000}>1,000</option>
+                <option value={2000}>2,000</option>
+              </select>
+              <span className="text-yellow-700">nodes for performance.</span>
+            </div>
+          )}
         </div>
       )}
 
