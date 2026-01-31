@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { Settings, Upload, Search, BarChart3, Save, ShieldCheck, Book, GitBranch, Zap } from 'lucide-react';
+import { Settings, Upload, Search, BarChart3, Save, ShieldCheck, Book, GitBranch, Zap, GitPullRequest } from 'lucide-react';
 import UploadStep from '../components/UploadStep';
 import AnalysisView from '../components/AnalysisView';
 import QueryView from '../components/QueryView';
@@ -10,10 +10,11 @@ import ComplianceView from '../components/ComplianceView';
 import SpecificationManager from '../components/SpecificationManager';
 import GitAnalysisView from '../components/GitAnalysisView';
 import LLMComplianceView from '../components/LLMComplianceView';
+import PRAnalysisView from '../components/PRAnalysisView';
 import { configureAPI, healthCheck } from '../lib/api';
 import '../styles/globals.css';
 
-type View = 'config' | 'upload' | 'analysis' | 'query' | 'stats' | 'compliance' | 'specs' | 'git' | 'llm-compliance';
+type View = 'config' | 'upload' | 'analysis' | 'query' | 'stats' | 'compliance' | 'specs' | 'git' | 'llm-compliance' | 'pr-analysis';
 
 export default function Home() {
   const [currentView, setCurrentView] = useState<View>('config');
@@ -30,6 +31,18 @@ export default function Home() {
 
   useEffect(() => {
     checkHealth();
+    
+    // Listen for navigation events from child components
+    const handleNavigate = (event: CustomEvent<View>) => {
+      if (event.detail) {
+        setCurrentView(event.detail);
+      }
+    };
+    
+    window.addEventListener('navigate', handleNavigate as EventListener);
+    return () => {
+      window.removeEventListener('navigate', handleNavigate as EventListener);
+    };
   }, []);
 
   const checkHealth = async () => {
@@ -207,6 +220,17 @@ export default function Home() {
                     <Zap size={18} />
                     LLM Compliance
                   </button>
+                  <button
+                    onClick={() => setCurrentView('pr-analysis')}
+                    className={`px-4 py-3 font-medium transition flex items-center gap-2 ${
+                      currentView === 'pr-analysis'
+                        ? 'border-b-2 border-purple-600 text-purple-600'
+                        : 'text-gray-600 hover:text-gray-800'
+                    }`}
+                  >
+                    <GitPullRequest size={18} />
+                    PR Analysis
+                  </button>
                 </>
               )}
             </div>
@@ -312,6 +336,8 @@ export default function Home() {
         {currentView === 'git' && uploaded && <GitAnalysisView />}
 
         {currentView === 'llm-compliance' && uploaded && <LLMComplianceView />}
+
+        {currentView === 'pr-analysis' && uploaded && <PRAnalysisView />}
       </main>
 
       {/* Footer */}
