@@ -462,13 +462,23 @@ class CodeGraphIndexer:
         entities_path = self.persist_dir / "entities.pkl"
         relationships_path = self.persist_dir / "relationships.pkl"
         
+        # Debug output
+        print(f"🔍 Checking for persisted data:")
+        print(f"   persist_dir: {self.persist_dir.resolve()}")
+        print(f"   entities.pkl exists: {entities_path.exists()}")
+        print(f"   relationships.pkl exists: {relationships_path.exists()}")
+        
         if entities_path.exists() and relationships_path.exists():
             try:
+                print(f"📂 Loading entities from: {entities_path.resolve()}")
                 with open(entities_path, 'rb') as f:
                     self.entities = pickle.load(f)
+                print(f"   ✓ Loaded {len(self.entities)} entities")
                 
+                print(f"📂 Loading relationships from: {relationships_path.resolve()}")
                 with open(relationships_path, 'rb') as f:
                     self.relationships = pickle.load(f)
+                print(f"   ✓ Loaded {len(self.relationships)} relationships")
                 
                 print(f"♻️  Loaded existing graph data from: {self.persist_dir}")
                 print(f"   Entities: {len(self.entities)}, Relationships: {len(self.relationships)}")
@@ -479,7 +489,9 @@ class CodeGraphIndexer:
                 self._data_loaded = True
                     
             except Exception as e:
+                import traceback
                 print(f"⚠️  Could not load persisted data: {e}")
+                traceback.print_exc()
                 self.entities = []
                 self.relationships = []
         else:

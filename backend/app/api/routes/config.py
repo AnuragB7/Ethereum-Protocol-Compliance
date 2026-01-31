@@ -20,6 +20,14 @@ async def configure_api(config: ConfigureRequest):
     This must be called before using any analysis features.
     """
     try:
+        # Handle nest_asyncio patching for uvloop compatibility
+        try:
+            import nest_asyncio
+            nest_asyncio.apply()
+        except (ValueError, RuntimeError):
+            # Already patched or can't patch uvloop - that's OK
+            pass
+        
         from app.core.indexer import CodeGraphIndexer
         from app.core.rag_engine import HybridSearchRAG
         from app.services.analysis import FunctionalAnalyzer

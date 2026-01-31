@@ -575,6 +575,110 @@ async def get_pr_graph(pr_id: str):
     return graph_data
 
 
+@router.get("/graphs/{pr_id}/data")
+async def get_pr_graph_visualization_data(pr_id: str):
+    """
+    Get PR graph data formatted for visualization (same format as /api/graph-data).
+    
+    Returns nodes and edges directly from pr_graph_storage without copying to graph_storage.
+    
+    Args:
+        pr_id: PR identifier (format: owner_repo_prNumber)
+        
+    Returns:
+        {"nodes": [...], "edges": [...]}
+    """
+    from app.services.enhanced_compliance import EnhancedComplianceAnalyzer
+    import pickle
+    from pathlib import Path
+    
+    # Get the PR graph storage path
+    pr_storage = Path("pr_graph_storage") / pr_id
+    entities_path = pr_storage / "entities.pkl"
+    relationships_path = pr_storage / "relationships.pkl"
+    
+    if not entities_path.exists() or not relationships_path.exists():
+        raise HTTPException(status_code=404, detail=f"PR graph not found: {pr_id}")
+    
+    try:
+        with open(entities_path, 'rb') as f:
+            entities = pickle.load(f)
+        with open(relationships_path, 'rb') as f:
+            relationships = pickle.load(f)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to load PR graph: {str(e)}")
+    
+    # Build nodes from entities with UNIQUE IDs
+    nodes = []
+    seen_ids = {}
+    id_mapping = {}
+    
+    for i, entity in enumerate(entities):
+        name = entity.name if hasattr(entity, 'name') else f"node_{i}"
+        
+        if name in seen_ids:
+            seen_ids[name] += 1
+            unique_id = f"{name}_{seen_ids[name]}"
+        else:
+            seen_ids[name] = 0
+            unique_id = name
+        
+        id_mapping[i] = unique_id
+        
+        nodes.append({
+            "id": unique_id,
+            "name": name,
+            "label": name,
+            "type": entity.type if hasattr(entity, 'type') else "unknown",
+            "language": entity.language if hasattr(entity, 'language') else None,
+            "file_path": entity.file_path if hasattr(entity, 'file_path') else None,
+            "line_start": entity.line_start if hasattr(entity, 'line_start') else None,
+            "line_end": entity.line_end if hasattr(entity, 'line_end') else None,
+            "parent": entity.parent if hasattr(entity, 'parent') else None
+        })
+    
+    # Create name to ID mapping
+    valid_node_ids = {node["id"] for node in nodes}
+    name_to_id = {}
+    for node in nodes:
+        if node["name"] not in name_to_id:
+            name_to_id[node["name"]] = node["id"]
+    
+    # Build edges from relationships
+    edges = []
+    seen_edges = set()
+    
+    for rel in relationships:
+        source = rel.source if hasattr(rel, 'source') else None
+        target = rel.target if hasattr(rel, 'target') else None
+        
+        if not source or not target:
+            continue
+        
+        # Try to map to valid node IDs
+        source_id = source if source in valid_node_ids else name_to_id.get(source)
+        target_id = target if target in valid_node_ids else name_to_id.get(target)
+        
+        if not source_id or not target_id:
+            continue
+        
+        edge_key = (source_id, target_id, rel.type if hasattr(rel, 'type') else '')
+        if edge_key in seen_edges:
+            continue
+        seen_edges.add(edge_key)
+        
+        edges.append({
+            "from": source_id,
+            "to": target_id,
+            "source": source_id,
+            "target": target_id,
+            "relationship": rel.type if hasattr(rel, 'type') else "related",
+            "label": rel.type if hasattr(rel, 'type') else ""
+        })
+    
+    return {"nodes": nodes, "edges": edges}
+
+
 @router.delete("/graphs/{pr_id}")
 async def delete_pr_graph(pr_id: str):
     """

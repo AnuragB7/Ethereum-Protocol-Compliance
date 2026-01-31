@@ -42,6 +42,7 @@ class RunComplianceRequest(BaseModel):
     """Request to run LLM compliance check"""
     max_entities: int = Field(default=20, description="Maximum entities to analyze")
     spec_top_k: int = Field(default=5, description="Specs to retrieve per entity")
+    codebase_path: Optional[str] = Field(default=None, description="Optional path to local codebase folder. If provided, will parse this folder instead of using indexed codebase.")
 
 
 class AnalyzeCodeRequest(BaseModel):
@@ -276,23 +277,20 @@ async def search_by_eip(eip_number: str, top_k: int = 10):
 @router.post("/run-compliance")
 async def run_llm_compliance(request: RunComplianceRequest):
     """
-    Run LLM-powered compliance check on indexed codebase.
+    Run LLM-powered compliance check on indexed codebase or a local folder.
     
     This will:
-    1. Get code entities from the Property Graph
+    1. Get code entities from the Property Graph (or parse from codebase_path if provided)
     2. For each entity, query specs using hybrid search
     3. Use LLM to analyze code vs specs
     4. Return structured compliance report
     
     Note: This can be expensive for large codebases. Use max_entities to limit.
     """
+    import os
+    from pathlib import Path
+    
     try:
-        if not deps.entities:
-            raise HTTPException(
-                status_code=400,
-                detail="No codebase indexed. Upload a codebase first."
-            )
-        
         llm_analyzer = _get_llm_compliance_analyzer()
         
         if not llm_analyzer.spec_indexer.index:
@@ -301,18 +299,59 @@ async def run_llm_compliance(request: RunComplianceRequest):
                 detail="Specs not indexed. Call /api/llm-compliance/ingest-specs first."
             )
         
+        entities_to_analyze = []
+        source_info = ""
+        
+        # If codebase_path is provided, parse the folder directly
+        if request.codebase_path:
+            codebase_path = Path(request.codebase_path).expanduser().resolve()
+            
+            if not codebase_path.exists():
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Codebase path does not exist: {codebase_path}"
+                )
+            
+            if not codebase_path.is_dir():
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Codebase path is not a directory: {codebase_path}"
+                )
+            
+            # Parse the codebase using the parser
+            from app.core.parser import CodebaseParser
+            parser = CodebaseParser()
+            parsed_data = parser.parse_codebase(str(codebase_path))
+            entities_to_analyze = parsed_data['entities']
+            source_info = f"Local folder: {codebase_path}"
+            logger.info(f"Parsed {len(entities_to_analyze)} entities from {codebase_path}")
+        else:
+            # Use pre-indexed codebase
+            if not deps.entities:
+                raise HTTPException(
+                    status_code=400,
+                    detail="No codebase indexed. Either upload a codebase first or provide a codebase_path."
+                )
+            entities_to_analyze = deps.entities
+            source_info = "Indexed codebase"
+        
         report = llm_analyzer.analyze_codebase(
-            entities=deps.entities,
+            entities=entities_to_analyze,
             max_entities=request.max_entities,
             spec_top_k=request.spec_top_k
         )
         
         return {
             "status": "success",
+            "source": source_info,
+            "entities_parsed": len(entities_to_analyze),
             "report": report.to_dict()
         }
         
+    except HTTPException:
+        raise
     except Exception as e:
+        logger.error(f"Error in run_llm_compliance: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

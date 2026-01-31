@@ -60,7 +60,11 @@ EMBED_MODEL = "text-embedding-ada-002"  # Standard embedding model
 
 # Asyncio Fix - Required for running async operations in Jupyter/scripts
 # This allows nested event loops, which some libraries require
-nest_asyncio.apply()
+try:
+    nest_asyncio.apply()
+except (ValueError, RuntimeError):
+    # Can't patch uvloop or already patched - that's OK in server context
+    pass
 
 # Logging Configuration - Reduce noise from llama_index internal logging
 logging.getLogger("llama_index").setLevel(logging.ERROR)
