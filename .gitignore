@@ -42,3 +42,6 @@ spec_storage/
 # Node modules (for frontend)
 node_modules/
 .next/
+
+# Frontend folder (tracked on feature/frontend branch)
+frontend/
