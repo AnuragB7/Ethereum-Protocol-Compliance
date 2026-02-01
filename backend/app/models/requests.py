@@ -97,3 +97,14 @@ class WebhookConfigRequest(BaseModel):
     """Request to configure webhook settings."""
     secret: Optional[str] = Field(default=None, description="Webhook secret for verification")
     events: List[str] = Field(default_factory=lambda: ["push", "pull_request"], description="Events to listen for")
+
+
+class CIAnalysisRequest(BaseModel):
+    """Request for CI/CD pipeline PR analysis."""
+    owner: str = Field(..., description="Repository owner (e.g., 'ethereum')")
+    repo: str = Field(..., description="Repository name (e.g., 'go-ethereum')")
+    pr_number: int = Field(..., description="Pull request number")
+    mode: str = Field(default="quick", description="Analysis mode: 'quick' (diff-based) or 'deep' (graph-based)")
+    fail_on_critical: bool = Field(default=True, description="Should CI fail on critical issues")
+    fail_on_warning: bool = Field(default=False, description="Should CI fail on warning-level issues")
+    github_token: Optional[str] = Field(default=None, description="GitHub token for private repos")

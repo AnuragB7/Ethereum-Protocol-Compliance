@@ -167,3 +167,28 @@ class EIPResponse(BaseModel):
     category: Optional[str] = None
     abstract: str
     rules_added: int = 0
+
+
+class CIAnalysisResponse(BaseModel):
+    """Response for CI/CD pipeline PR analysis."""
+    pr: str = Field(..., description="PR identifier (owner/repo#number)")
+    status: str = Field(..., description="Analysis status: 'success' or 'error'")
+    mode: str = Field(..., description="Analysis mode used")
+    
+    # Counts
+    critical_count: int = Field(default=0, description="Number of critical issues")
+    warning_count: int = Field(default=0, description="Number of warnings")
+    info_count: int = Field(default=0, description="Number of info-level findings")
+    
+    # CI decision fields
+    has_issues: bool = Field(default=False, description="Whether any issues were found (for conditional comment)")
+    should_fail: bool = Field(default=False, description="Whether CI should fail based on config")
+    
+    # Markdown comment for PR
+    markdown_comment: str = Field(default="", description="Formatted markdown comment to post on PR")
+    
+    # Optional details
+    deviations: List[Dict[str, Any]] = Field(default_factory=list, description="List of deviations found")
+    duration_seconds: float = Field(default=0, description="Analysis duration")
+    commit_sha: Optional[str] = Field(default=None, description="Analyzed commit SHA")
+    error: Optional[str] = Field(default=None, description="Error message if status is 'error'")

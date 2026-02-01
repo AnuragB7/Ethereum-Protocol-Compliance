@@ -719,3 +719,169 @@ async def load_pr_graph_to_main(pr_id: str):
         "message": f"PR graph {pr_id} loaded to main storage",
         "note": "Refresh the Statistics tab to see the updated graph"
     }
+
+
+# =============================================================================
+# CI/CD Integration Endpoint
+# =============================================================================
+
+class CIAnalysisRequest(BaseModel):
+    """Request model for CI/CD pipeline PR analysis"""
+    owner: str
+    repo: str
+    pr_number: int
+    mode: str = "quick"  # quick or deep
+    fail_on_critical: bool = True
+    fail_on_warning: bool = False
+    github_token: Optional[str] = None
+
+
+class CIAnalysisResponse(BaseModel):
+    """Response model for CI/CD pipeline - optimized for GitHub Actions"""
+    pr: str
+    status: str  # success or error
+    mode: str
+    
+    # Counts
+    critical_count: int = 0
+    warning_count: int = 0
+    info_count: int = 0
+    
+    # CI decision fields
+    has_issues: bool = False
+    should_fail: bool = False
+    
+    # Markdown comment for PR
+    markdown_comment: str = ""
+    
+    # Optional details
+    deviations: List[Dict[str, Any]] = []
+    duration_seconds: float = 0
+    commit_sha: Optional[str] = None
+    error: Optional[str] = None
+
+
+@router.post("/ci", response_model=CIAnalysisResponse)
+async def analyze_pr_for_ci(request: CIAnalysisRequest):
+    """
+    CI/CD optimized endpoint for PR analysis.
+    
+    Returns a response specifically designed for GitHub Actions integration:
+    - `has_issues`: Boolean to conditionally post PR comment
+    - `should_fail`: Boolean to set CI exit code
+    - `markdown_comment`: Pre-formatted markdown for PR comment
+    
+    Usage in GitHub Actions:
+    1. Call this endpoint with PR details
+    2. Check `has_issues` to decide if comment should be posted
+    3. Check `should_fail` to decide CI exit code
+    4. Use `markdown_comment` as the PR comment body
+    """
+    import time
+    from app.services.ci_formatter import format_pr_comment, format_error_comment
+    
+    start_time = time.time()
+    pr_identifier = f"{request.owner}/{request.repo}#{request.pr_number}"
+    
+    logger.info(f"CI Analysis requested for {pr_identifier} in {request.mode} mode")
+    
+    # Initialize components
+    _init_components()
+    
+    try:
+        # Use the existing analysis infrastructure
+        from app.services.enhanced_compliance import run_dual_analysis
+        
+        # Use github_token from request or environment
+        github_token = request.github_token or os.getenv("GITHUB_TOKEN")
+        
+        results = await run_dual_analysis(
+            owner=request.owner,
+            repo=request.repo,
+            pr_number=request.pr_number,
+            mode=request.mode,
+            github_token=github_token,
+            llm_analyzer=deps.llm_compliance_analyzer,
+            indexer=deps.indexer,
+            github_client=deps.github_client,
+            spec_indexer=deps.spec_indexer
+        )
+        
+        duration = time.time() - start_time
+        
+        # Extract results based on mode
+        mode_result = results.get(request.mode) or results.get('quick') or {}
+        
+        critical_count = mode_result.get('critical_count', 0)
+        warning_count = mode_result.get('warning_count', 0)
+        info_count = mode_result.get('info_count', 0)
+        deviations = mode_result.get('deviations', [])
+        commit_sha = results.get('commit_sha')
+        graph_stats = mode_result.get('graph_stats')
+        
+        # Determine CI outcome
+        has_issues = critical_count > 0 or warning_count > 0
+        should_fail = (
+            (request.fail_on_critical and critical_count > 0) or
+            (request.fail_on_warning and warning_count > 0)
+        )
+        
+        # Generate markdown comment (only if there are issues)
+        markdown_comment = ""
+        if has_issues:
+            markdown_comment = format_pr_comment(
+                pr_identifier=pr_identifier,
+                mode=request.mode,
+                critical_count=critical_count,
+                warning_count=warning_count,
+                info_count=info_count,
+                deviations=deviations,
+                should_fail=should_fail,
+                commit_sha=commit_sha,
+                duration_seconds=duration,
+                graph_stats=graph_stats
+            )
+        
+        logger.info(f"CI Analysis completed for {pr_identifier}: "
+                   f"{critical_count} critical, {warning_count} warnings, should_fail={should_fail}")
+        
+        return CIAnalysisResponse(
+            pr=pr_identifier,
+            status="success",
+            mode=request.mode,
+            critical_count=critical_count,
+            warning_count=warning_count,
+            info_count=info_count,
+            has_issues=has_issues,
+            should_fail=should_fail,
+            markdown_comment=markdown_comment,
+            deviations=deviations,
+            duration_seconds=duration,
+            commit_sha=commit_sha
+        )
+        
+    except Exception as e:
+        logger.error(f"CI Analysis failed for {pr_identifier}: {e}")
+        import traceback
+        traceback.print_exc()
+        
+        duration = time.time() - start_time
+        error_message = str(e)
+        
+        # Generate error comment
+        markdown_comment = format_error_comment(
+            pr_identifier=pr_identifier,
+            error_message=error_message,
+            mode=request.mode
+        )
+        
+        return CIAnalysisResponse(
+            pr=pr_identifier,
+            status="error",
+            mode=request.mode,
+            has_issues=True,  # Show error as an issue
+            should_fail=False,  # Don't fail CI on analysis errors
+            markdown_comment=markdown_comment,
+            duration_seconds=duration,
+            error=error_message
+        )
