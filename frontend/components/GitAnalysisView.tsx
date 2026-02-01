@@ -3,493 +3,386 @@
 import React, { useState } from 'react';
 import { 
   GitBranch, 
-  GitCommit, 
-  GitPullRequest,
-  FolderGit,
-  Loader,
-  AlertTriangle,
-  CheckCircle,
-  ExternalLink,
-  Play
+  Copy,
+  Check,
+  Settings,
+  Zap,
+  Clock,
+  Info,
+  ExternalLink
 } from 'lucide-react';
-import {
-  analyzeCommit,
-  analyzeRemoteCommit,
-  analyzePullRequest,
-  analyzeCommitRange
-} from '../lib/api';
 
-interface AnalysisResult {
-  status: string;
-  commit?: any;
-  deviations?: any[];
-  summary?: any;
-  error?: string;
+// CI Configuration types
+interface CIConfig {
+  mode: 'quick' | 'deep';
+  failOnCritical: boolean;
+  failOnWarning: boolean;
 }
 
+// Generate GitHub Actions workflow YAML
+const generateWorkflowYAML = (config: CIConfig): string => {
+  return `name: PR Compliance Analysis
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  analyze:
+    name: Analyze PR for Compliance
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    
+    steps:
+      - name: Run Compliance Analysis
+        id: analysis
+        run: |
+          RESPONSE=$(curl -s -X POST "\${{ secrets.COMPLIANCE_API_URL }}/api/pr-analysis/ci" \\
+            -H "Content-Type: application/json" \\
+            -H "Authorization: Bearer \${{ secrets.GITHUB_TOKEN }}" \\
+            -d '{
+              "owner": "\${{ github.repository_owner }}",
+              "repo": "\${{ github.event.repository.name }}",
+              "pr_number": \${{ github.event.pull_request.number }},
+              "mode": "${config.mode}",
+              "fail_on_critical": ${config.failOnCritical},
+              "fail_on_warning": ${config.failOnWarning}
+            }')
+          
+          echo "response<<EOF" >> $GITHUB_OUTPUT
+          echo "$RESPONSE" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+          
+          # Extract fields for conditional steps
+          HAS_ISSUES=$(echo "$RESPONSE" | jq -r '.has_issues // false')
+          SHOULD_FAIL=$(echo "$RESPONSE" | jq -r '.should_fail // false')
+          echo "has_issues=$HAS_ISSUES" >> $GITHUB_OUTPUT
+          echo "should_fail=$SHOULD_FAIL" >> $GITHUB_OUTPUT
+          
+          # Save markdown comment to file (handles multiline better)
+          echo "$RESPONSE" | jq -r '.markdown_comment // ""' > comment.md
+
+      - name: Post PR Comment
+        if: steps.analysis.outputs.has_issues == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const comment = fs.readFileSync('comment.md', 'utf8');
+            if (comment.trim()) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: comment
+              });
+            }
+
+      - name: Check Compliance Status
+        if: steps.analysis.outputs.should_fail == 'true'
+        run: |
+          echo "Compliance check failed. See PR comment for details."
+          exit 1
+`;
+};
+
 export default function GitAnalysisView() {
-  const [activeTab, setActiveTab] = useState<'local' | 'remote' | 'pr'>('local');
-  const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState<AnalysisResult | null>(null);
-  
-  // Local repo form
-  const [localRepo, setLocalRepo] = useState({
-    path: '',
-    commitHash: 'HEAD'
+  // CI Configuration state
+  const [ciConfig, setCiConfig] = useState<CIConfig>({
+    mode: 'quick',
+    failOnCritical: true,
+    failOnWarning: false
   });
-  
-  // Remote repo form
-  const [remoteRepo, setRemoteRepo] = useState({
-    url: '',
-    commitHash: '',
-    branch: 'main'
-  });
-  
-  // PR form
-  const [prForm, setPrForm] = useState({
-    repoUrl: '',
-    prNumber: ''
-  });
+  const [workflowGenerated, setWorkflowGenerated] = useState(false);
+  const [copied, setCopied] = useState(false);
 
-  const handleAnalyzeLocal = async () => {
-    if (!localRepo.path) {
-      alert('Please enter the repository path');
-      return;
-    }
-    
-    setLoading(true);
-    setResult(null);
-    
+  const handleCopyWorkflow = async () => {
+    const yaml = generateWorkflowYAML(ciConfig);
     try {
-      const data = await analyzeCommit(localRepo.path, localRepo.commitHash);
-      setResult(data);
-    } catch (error: any) {
-      setResult({ 
-        status: 'error', 
-        error: error.response?.data?.detail || error.message || 'Analysis failed' 
-      });
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleAnalyzeRemote = async () => {
-    if (!remoteRepo.url || !remoteRepo.commitHash) {
-      alert('Please enter the repository URL and commit hash');
-      return;
-    }
-    
-    setLoading(true);
-    setResult(null);
-    
-    try {
-      const data = await analyzeRemoteCommit(
-        remoteRepo.url, 
-        remoteRepo.commitHash,
-        remoteRepo.branch
-      );
-      setResult(data);
-    } catch (error: any) {
-      setResult({ 
-        status: 'error', 
-        error: error.response?.data?.detail || error.message || 'Analysis failed' 
-      });
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleAnalyzePR = async () => {
-    if (!prForm.repoUrl || !prForm.prNumber) {
-      alert('Please enter the repository URL and PR number');
-      return;
-    }
-    
-    setLoading(true);
-    setResult(null);
-    
-    try {
-      const data = await analyzePullRequest(prForm.repoUrl, parseInt(prForm.prNumber));
-      setResult(data);
-    } catch (error: any) {
-      setResult({ 
-        status: 'error', 
-        error: error.response?.data?.detail || error.message || 'Analysis failed' 
-      });
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const getSeverityColor = (severity: string) => {
-    switch (severity) {
-      case 'critical': return 'text-red-600 bg-red-50';
-      case 'warning': return 'text-yellow-600 bg-yellow-50';
-      default: return 'text-blue-600 bg-blue-50';
+      await navigator.clipboard.writeText(yaml);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (err) {
+      console.error('Failed to copy:', err);
     }
   };
 
   return (
-    <div className="max-w-6xl mx-auto p-6">
+    <div className="max-w-4xl mx-auto p-6">
+      {/* Header */}
       <div className="flex items-center gap-3 mb-6">
-        <GitBranch size={32} className="text-primary-600" />
+        <div className="p-3 bg-gradient-to-br from-purple-500 to-indigo-600 rounded-xl">
+          <GitBranch size={28} className="text-white" />
+        </div>
         <div>
-          <h2 className="text-3xl font-bold text-gray-800">Git Analysis</h2>
-          <p className="text-gray-600">Analyze commits and pull requests for Ethereum compliance</p>
+          <h2 className="text-3xl font-bold text-gray-800">Automated CI/CD Compliance</h2>
+          <p className="text-gray-600">Set up GitHub Actions to automatically analyze PRs for Ethereum compliance</p>
         </div>
       </div>
 
-      {/* Tabs */}
-      <div className="flex border-b mb-6">
-        <button
-          onClick={() => setActiveTab('local')}
-          className={`px-6 py-3 font-medium flex items-center gap-2 ${
-            activeTab === 'local' 
-              ? 'border-b-2 border-primary-600 text-primary-600' 
-              : 'text-gray-500 hover:text-gray-700'
-          }`}
-        >
-          <FolderGit size={18} />
-          Local Repository
-        </button>
-        <button
-          onClick={() => setActiveTab('remote')}
-          className={`px-6 py-3 font-medium flex items-center gap-2 ${
-            activeTab === 'remote' 
-              ? 'border-b-2 border-primary-600 text-primary-600' 
-              : 'text-gray-500 hover:text-gray-700'
-          }`}
-        >
-          <GitCommit size={18} />
-          Remote Commit
-        </button>
-        <button
-          onClick={() => setActiveTab('pr')}
-          className={`px-6 py-3 font-medium flex items-center gap-2 ${
-            activeTab === 'pr' 
-              ? 'border-b-2 border-primary-600 text-primary-600' 
-              : 'text-gray-500 hover:text-gray-700'
-          }`}
-        >
-          <GitPullRequest size={18} />
-          Pull Request
-        </button>
-      </div>
-
-      {/* Local Repository Tab */}
-      {activeTab === 'local' && (
-        <div className="bg-white p-6 rounded-lg shadow">
-          <h3 className="text-xl font-semibold mb-4">Analyze Local Repository</h3>
-          <p className="text-gray-600 mb-4">
-            Enter the path to a local Git repository on your machine.
-          </p>
-          
-          <div className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Repository Path *
-              </label>
-              <input
-                type="text"
-                value={localRepo.path}
-                onChange={(e) => setLocalRepo({ ...localRepo, path: e.target.value })}
-                placeholder="/path/to/your/git/repository"
-                className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-primary-500"
-              />
+      <div className="space-y-6">
+        {/* How It Works */}
+        <div className="bg-white rounded-xl border shadow-sm p-6">
+          <h3 className="font-semibold text-gray-800 mb-4 flex items-center gap-2">
+            <Settings className="w-5 h-5 text-purple-600" />
+            How It Works
+          </h3>
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+            <div className="text-center p-4 bg-gradient-to-br from-purple-50 to-indigo-50 rounded-lg border border-purple-100">
+              <div className="w-10 h-10 bg-purple-600 text-white rounded-full flex items-center justify-center mx-auto mb-3 font-bold text-lg">1</div>
+              <p className="text-sm font-medium text-gray-800">PR Opened</p>
+              <p className="text-xs text-gray-500 mt-1">Developer creates PR on GitHub</p>
             </div>
-            
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Commit Hash (default: HEAD)
-              </label>
-              <input
-                type="text"
-                value={localRepo.commitHash}
-                onChange={(e) => setLocalRepo({ ...localRepo, commitHash: e.target.value })}
-                placeholder="HEAD or specific commit hash"
-                className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-primary-500"
-              />
+            <div className="text-center p-4 bg-gradient-to-br from-purple-50 to-indigo-50 rounded-lg border border-purple-100">
+              <div className="w-10 h-10 bg-purple-600 text-white rounded-full flex items-center justify-center mx-auto mb-3 font-bold text-lg">2</div>
+              <p className="text-sm font-medium text-gray-800">Workflow Triggers</p>
+              <p className="text-xs text-gray-500 mt-1">GitHub Actions automatically runs</p>
             </div>
-            
-            <button
-              onClick={handleAnalyzeLocal}
-              disabled={loading}
-              className="w-full py-3 bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:bg-gray-400 flex items-center justify-center gap-2"
-            >
-              {loading ? (
-                <>
-                  <Loader className="animate-spin" size={20} />
-                  Analyzing...
-                </>
-              ) : (
-                <>
-                  <Play size={20} />
-                  Analyze Commit
-                </>
-              )}
-            </button>
+            <div className="text-center p-4 bg-gradient-to-br from-purple-50 to-indigo-50 rounded-lg border border-purple-100">
+              <div className="w-10 h-10 bg-purple-600 text-white rounded-full flex items-center justify-center mx-auto mb-3 font-bold text-lg">3</div>
+              <p className="text-sm font-medium text-gray-800">LLM Analyzes</p>
+              <p className="text-xs text-gray-500 mt-1">Your API checks compliance</p>
+            </div>
+            <div className="text-center p-4 bg-gradient-to-br from-purple-50 to-indigo-50 rounded-lg border border-purple-100">
+              <div className="w-10 h-10 bg-purple-600 text-white rounded-full flex items-center justify-center mx-auto mb-3 font-bold text-lg">4</div>
+              <p className="text-sm font-medium text-gray-800">Comment Posted</p>
+              <p className="text-xs text-gray-500 mt-1">Results appear on PR (if issues)</p>
+            </div>
           </div>
         </div>
-      )}
 
-      {/* Remote Commit Tab */}
-      {activeTab === 'remote' && (
-        <div className="bg-white p-6 rounded-lg shadow">
-          <h3 className="text-xl font-semibold mb-4">Analyze Remote Commit</h3>
-          <p className="text-gray-600 mb-4">
-            Enter a GitHub/GitLab repository URL and commit hash to analyze.
+        {/* GitHub Secret Setup Guide */}
+        <div className="bg-white rounded-xl border shadow-sm p-6">
+          <h3 className="font-semibold text-gray-800 mb-4 flex items-center gap-2">
+            <Info className="w-5 h-5 text-blue-600" />
+            Required GitHub Secret Configuration
+          </h3>
+          <p className="text-sm text-gray-600 mb-4">
+            The workflow uses a secret to know where your Compliance API is deployed. Add this secret to your GitHub repository:
           </p>
           
-          <div className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Repository URL *
-              </label>
-              <input
-                type="text"
-                value={remoteRepo.url}
-                onChange={(e) => setRemoteRepo({ ...remoteRepo, url: e.target.value })}
-                placeholder="https://github.com/owner/repo"
-                className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-primary-500"
-              />
+          {/* Visual representation of GitHub Secrets UI */}
+          <div className="bg-gray-900 rounded-lg overflow-hidden border border-gray-700">
+            {/* Fake GitHub header */}
+            <div className="bg-gray-800 px-4 py-2 border-b border-gray-700 flex items-center gap-2">
+              <div className="flex gap-1.5">
+                <div className="w-3 h-3 rounded-full bg-red-500"></div>
+                <div className="w-3 h-3 rounded-full bg-yellow-500"></div>
+                <div className="w-3 h-3 rounded-full bg-green-500"></div>
+              </div>
+              <span className="text-gray-400 text-xs ml-2">Settings → Secrets and variables → Actions → New repository secret</span>
             </div>
             
-            <div className="grid grid-cols-2 gap-4">
+            {/* Secret form mockup */}
+            <div className="p-4 space-y-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Commit Hash *
-                </label>
-                <input
-                  type="text"
-                  value={remoteRepo.commitHash}
-                  onChange={(e) => setRemoteRepo({ ...remoteRepo, commitHash: e.target.value })}
-                  placeholder="abc123..."
-                  className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-primary-500"
-                />
-              </div>
-              
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Branch
-                </label>
-                <input
-                  type="text"
-                  value={remoteRepo.branch}
-                  onChange={(e) => setRemoteRepo({ ...remoteRepo, branch: e.target.value })}
-                  placeholder="main"
-                  className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-primary-500"
-                />
-              </div>
-            </div>
-            
-            <button
-              onClick={handleAnalyzeRemote}
-              disabled={loading}
-              className="w-full py-3 bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:bg-gray-400 flex items-center justify-center gap-2"
-            >
-              {loading ? (
-                <>
-                  <Loader className="animate-spin" size={20} />
-                  Analyzing...
-                </>
-              ) : (
-                <>
-                  <Play size={20} />
-                  Analyze Remote Commit
-                </>
-              )}
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Pull Request Tab */}
-      {activeTab === 'pr' && (
-        <div className="bg-white p-6 rounded-lg shadow">
-          <h3 className="text-xl font-semibold mb-4">Analyze Pull Request</h3>
-          <p className="text-gray-600 mb-4">
-            Enter a GitHub repository URL and PR number to analyze all changes.
-          </p>
-          
-          <div className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Repository URL *
-              </label>
-              <input
-                type="text"
-                value={prForm.repoUrl}
-                onChange={(e) => setPrForm({ ...prForm, repoUrl: e.target.value })}
-                placeholder="https://github.com/owner/repo"
-                className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-primary-500"
-              />
-            </div>
-            
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Pull Request Number *
-              </label>
-              <input
-                type="text"
-                value={prForm.prNumber}
-                onChange={(e) => setPrForm({ ...prForm, prNumber: e.target.value })}
-                placeholder="123"
-                className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-primary-500"
-              />
-            </div>
-            
-            <button
-              onClick={handleAnalyzePR}
-              disabled={loading}
-              className="w-full py-3 bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:bg-gray-400 flex items-center justify-center gap-2"
-            >
-              {loading ? (
-                <>
-                  <Loader className="animate-spin" size={20} />
-                  Analyzing...
-                </>
-              ) : (
-                <>
-                  <Play size={20} />
-                  Analyze Pull Request
-                </>
-              )}
-            </button>
-          </div>
-          
-          <div className="mt-4 p-4 bg-blue-50 rounded-lg">
-            <p className="text-sm text-blue-800">
-              <strong>Note:</strong> For private repositories, you may need to provide a GitHub token.
-              Set the <code className="bg-blue-100 px-1 rounded">GITHUB_TOKEN</code> environment variable.
-            </p>
-          </div>
-        </div>
-      )}
-
-      {/* Results Section */}
-      {result && (
-        <div className="mt-6">
-          {result.status === 'error' ? (
-            <div className="bg-red-50 border border-red-200 p-4 rounded-lg">
-              <div className="flex items-center gap-2 text-red-800">
-                <AlertTriangle size={20} />
-                <span className="font-semibold">Analysis Failed</span>
-              </div>
-              <p className="mt-2 text-red-700">{result.error}</p>
-            </div>
-          ) : (
-            <div className="bg-white rounded-lg shadow overflow-hidden">
-              <div className="p-4 bg-gray-50 border-b">
-                <div className="flex items-center gap-2">
-                  {result.summary?.compliance_passed ? (
-                    <CheckCircle className="text-green-600" size={24} />
-                  ) : (
-                    <AlertTriangle className="text-yellow-600" size={24} />
-                  )}
-                  <h3 className="text-xl font-semibold">Analysis Results</h3>
+                <label className="block text-xs text-gray-400 mb-1.5 uppercase tracking-wide">Name *</label>
+                <div className="bg-gray-800 border border-gray-600 rounded px-3 py-2 text-green-400 font-mono text-sm">
+                  COMPLIANCE_API_URL
                 </div>
-                
-                {result.commit && (
-                  <div className="mt-2 text-sm text-gray-600">
-                    <p><strong>Commit:</strong> {result.commit.hash?.substring(0, 8)}</p>
-                    <p><strong>Author:</strong> {result.commit.author}</p>
-                    <p><strong>Message:</strong> {result.commit.message}</p>
+              </div>
+              <div>
+                <label className="block text-xs text-gray-400 mb-1.5 uppercase tracking-wide">Secret *</label>
+                <div className="bg-gray-800 border border-gray-600 rounded px-3 py-2 text-green-400 font-mono text-sm">
+                  https://your-deployed-backend.com
+                </div>
+                <p className="text-xs text-gray-500 mt-1.5">
+                  ↑ Replace with your actual deployed backend URL
+                </p>
+              </div>
+              <div className="pt-2">
+                <div className="inline-block bg-green-600 text-white px-4 py-1.5 rounded text-sm font-medium">
+                  Add secret
+                </div>
+              </div>
+            </div>
+          </div>
+          
+          <p className="text-xs text-gray-500 mt-3">
+            Navigate to: <span className="font-medium">Your Repository → Settings → Secrets and variables → Actions → New repository secret</span>
+          </p>
+        </div>
+
+        {/* Configuration Form */}
+        <div className="bg-white rounded-xl border shadow-sm p-6">
+          <h3 className="font-semibold text-gray-800 mb-4">Configure Your Workflow</h3>
+          
+          <div className="space-y-5">
+            {/* Analysis Mode */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-3">
+                Analysis Mode
+              </label>
+              <div className="grid grid-cols-2 gap-4">
+                <button
+                  onClick={() => setCiConfig({ ...ciConfig, mode: 'quick' })}
+                  className={`p-4 rounded-xl border-2 text-left transition ${
+                    ciConfig.mode === 'quick'
+                      ? 'border-purple-500 bg-purple-50 ring-2 ring-purple-200'
+                      : 'border-gray-200 hover:border-gray-300 bg-white'
+                  }`}
+                >
+                  <div className="flex items-center gap-2 mb-2">
+                    <Zap className={`w-5 h-5 ${ciConfig.mode === 'quick' ? 'text-purple-600' : 'text-gray-400'}`} />
+                    <span className="font-semibold text-gray-800">Quick Mode</span>
                   </div>
+                  <p className="text-sm text-gray-600">
+                    Diff-based analysis using GitHub API. Fast feedback in ~30 seconds.
+                  </p>
+                  <p className="text-xs text-purple-600 mt-2 font-medium">Recommended for most PRs</p>
+                </button>
+                <button
+                  onClick={() => setCiConfig({ ...ciConfig, mode: 'deep' })}
+                  className={`p-4 rounded-xl border-2 text-left transition ${
+                    ciConfig.mode === 'deep'
+                      ? 'border-purple-500 bg-purple-50 ring-2 ring-purple-200'
+                      : 'border-gray-200 hover:border-gray-300 bg-white'
+                  }`}
+                >
+                  <div className="flex items-center gap-2 mb-2">
+                    <Clock className={`w-5 h-5 ${ciConfig.mode === 'deep' ? 'text-purple-600' : 'text-gray-400'}`} />
+                    <span className="font-semibold text-gray-800">Deep Mode</span>
+                  </div>
+                  <p className="text-sm text-gray-600">
+                    Clones repo and builds full property graph. Takes 2-5 minutes.
+                  </p>
+                  <p className="text-xs text-gray-500 mt-2">Best for critical/release PRs</p>
+                </button>
+              </div>
+            </div>
+
+            {/* Failure Thresholds */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-3">
+                When Should CI Fail?
+              </label>
+              <div className="space-y-3">
+                <label className="flex items-start gap-3 p-3 rounded-lg border-2 border-gray-200 hover:border-gray-300 cursor-pointer transition">
+                  <input
+                    type="checkbox"
+                    checked={ciConfig.failOnCritical}
+                    onChange={(e) => setCiConfig({ ...ciConfig, failOnCritical: e.target.checked })}
+                    className="w-5 h-5 text-purple-600 rounded focus:ring-purple-500 mt-0.5"
+                  />
+                  <div>
+                    <span className="text-sm font-medium text-gray-800">Fail on Critical Issues</span>
+                    <p className="text-xs text-gray-500 mt-0.5">Block PR merge when critical compliance violations are found</p>
+                  </div>
+                </label>
+                <label className="flex items-start gap-3 p-3 rounded-lg border-2 border-gray-200 hover:border-gray-300 cursor-pointer transition">
+                  <input
+                    type="checkbox"
+                    checked={ciConfig.failOnWarning}
+                    onChange={(e) => setCiConfig({ ...ciConfig, failOnWarning: e.target.checked })}
+                    className="w-5 h-5 text-purple-600 rounded focus:ring-purple-500 mt-0.5"
+                  />
+                  <div>
+                    <span className="text-sm font-medium text-gray-800">Fail on Warnings</span>
+                    <p className="text-xs text-gray-500 mt-0.5">Also block PR merge for warning-level issues (stricter)</p>
+                  </div>
+                </label>
+              </div>
+            </div>
+
+            {/* Generate Button */}
+            <button
+              onClick={() => setWorkflowGenerated(true)}
+              className="w-full py-3 bg-gradient-to-r from-purple-600 to-indigo-600 text-white rounded-xl hover:from-purple-700 hover:to-indigo-700 transition font-semibold text-lg"
+            >
+              Generate GitHub Actions Workflow
+            </button>
+          </div>
+        </div>
+
+        {/* Generated Workflow */}
+        {workflowGenerated && (
+          <div className="bg-white rounded-xl border shadow-sm overflow-hidden">
+            <div className="flex items-center justify-between p-4 bg-gray-800 border-b border-gray-700">
+              <div className="flex items-center gap-3">
+                <div className="flex gap-1.5">
+                  <div className="w-3 h-3 rounded-full bg-red-500"></div>
+                  <div className="w-3 h-3 rounded-full bg-yellow-500"></div>
+                  <div className="w-3 h-3 rounded-full bg-green-500"></div>
+                </div>
+                <code className="text-sm text-gray-300">.github/workflows/pr-compliance.yml</code>
+              </div>
+              <button
+                onClick={handleCopyWorkflow}
+                className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition ${
+                  copied
+                    ? 'bg-green-500 text-white'
+                    : 'bg-gray-700 text-gray-200 hover:bg-gray-600'
+                }`}
+              >
+                {copied ? (
+                  <>
+                    <Check className="w-4 h-4" />
+                    Copied!
+                  </>
+                ) : (
+                  <>
+                    <Copy className="w-4 h-4" />
+                    Copy to Clipboard
+                  </>
                 )}
-              </div>
-              
-              {result.summary && (
-                <div className="p-4 border-b">
-                  <div className="grid grid-cols-4 gap-4">
-                    <div className="text-center p-3 bg-gray-50 rounded">
-                      <p className="text-2xl font-bold">{result.summary.compliance_score?.toFixed(0) || 0}%</p>
-                      <p className="text-sm text-gray-600">Score</p>
-                    </div>
-                    <div className="text-center p-3 bg-red-50 rounded">
-                      <p className="text-2xl font-bold text-red-600">{result.summary.critical_issues || 0}</p>
-                      <p className="text-sm text-gray-600">Critical</p>
-                    </div>
-                    <div className="text-center p-3 bg-yellow-50 rounded">
-                      <p className="text-2xl font-bold text-yellow-600">{result.summary.warnings || 0}</p>
-                      <p className="text-sm text-gray-600">Warnings</p>
-                    </div>
-                    <div className="text-center p-3 bg-blue-50 rounded">
-                      <p className="text-2xl font-bold text-blue-600">{result.summary.total_deviations || 0}</p>
-                      <p className="text-sm text-gray-600">Total Issues</p>
-                    </div>
-                  </div>
-                </div>
-              )}
-              
-              {result.deviations && result.deviations.length > 0 && (
-                <div className="p-4">
-                  <h4 className="font-semibold mb-3">Deviations Found ({result.deviations.length})</h4>
-                  <div className="space-y-2 max-h-96 overflow-y-auto">
-                    {result.deviations.map((deviation: any, idx: number) => (
-                      <div key={idx} className={`p-3 rounded ${getSeverityColor(deviation.severity)}`}>
-                        <div className="flex items-start justify-between">
-                          <div>
-                            <span className="font-medium">{deviation.rule_id}</span>
-                            <span className="mx-2 text-gray-400">|</span>
-                            <span className="text-sm">{deviation.category}</span>
-                          </div>
-                          <span className="text-xs uppercase font-semibold">{deviation.severity}</span>
-                        </div>
-                        <p className="text-sm mt-1">{deviation.description}</p>
-                        {deviation.file_path && (
-                          <p className="text-xs mt-1 opacity-75">
-                            {deviation.file_path}:{deviation.line_number}
-                          </p>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-              
-              {(!result.deviations || result.deviations.length === 0) && (
-                <div className="p-8 text-center text-gray-500">
-                  <CheckCircle size={48} className="mx-auto mb-4 text-green-500" />
-                  <p>No compliance issues found!</p>
-                </div>
-              )}
+              </button>
             </div>
-          )}
-        </div>
-      )}
+            <pre className="p-4 overflow-x-auto text-sm bg-gray-900 text-gray-100 max-h-96">
+              <code>{generateWorkflowYAML(ciConfig)}</code>
+            </pre>
+          </div>
+        )}
 
-      {/* Webhook Setup Info */}
-      <div className="mt-8 bg-gray-50 rounded-lg p-6">
-        <h3 className="text-lg font-semibold mb-4">Automatic Analysis with Webhooks</h3>
-        <p className="text-gray-600 mb-4">
-          Set up webhooks to automatically analyze commits and PRs when they're pushed.
-        </p>
-        
-        <div className="space-y-3">
-          <div className="p-3 bg-white rounded border">
-            <p className="font-medium">GitHub Webhook URL</p>
-            <code className="text-sm text-primary-600">
-              {typeof window !== 'undefined' ? window.location.origin : 'http://localhost:8000'}/api/webhook/github
-            </code>
+        {/* Setup Instructions */}
+        {workflowGenerated && (
+          <div className="bg-blue-50 rounded-xl p-5 border border-blue-200">
+            <div className="flex items-start gap-3">
+              <Info className="w-6 h-6 text-blue-600 flex-shrink-0 mt-0.5" />
+              <div>
+                <p className="font-semibold text-blue-800 mb-3 text-lg">Setup Instructions</p>
+                <ol className="list-decimal list-inside space-y-2 text-blue-700">
+                  <li>Copy the workflow YAML above</li>
+                  <li>In your GitHub repository, create the file: <code className="bg-blue-100 px-1.5 py-0.5 rounded">.github/workflows/pr-compliance.yml</code></li>
+                  <li>Paste the workflow content and commit to your main branch</li>
+                  <li>Go to your repo's <strong>Settings → Secrets and variables → Actions</strong></li>
+                  <li>Click <strong>"New repository secret"</strong></li>
+                  <li>
+                    Add secret with name: <code className="bg-blue-100 px-1.5 py-0.5 rounded">COMPLIANCE_API_URL</code>
+                    <br />
+                    <span className="text-sm">Value: Your deployed backend URL (e.g., <code className="bg-blue-100 px-1.5 py-0.5 rounded">https://your-compliance-api.com</code>)</span>
+                  </li>
+                  <li>Open a test PR to verify the integration works</li>
+                </ol>
+                <div className="mt-4 p-3 bg-blue-100 rounded-lg">
+                  <p className="text-sm text-blue-800">
+                    <strong>Note:</strong> Comments are only posted when compliance issues are found. 
+                    Clean PRs pass silently with a green checkmark.
+                  </p>
+                </div>
+              </div>
+            </div>
           </div>
-          
-          <div className="p-3 bg-white rounded border">
-            <p className="font-medium">GitLab Webhook URL</p>
-            <code className="text-sm text-primary-600">
-              {typeof window !== 'undefined' ? window.location.origin : 'http://localhost:8000'}/api/webhook/gitlab
-            </code>
+        )}
+
+        {/* Link to Manual Analysis */}
+        <div className="bg-gray-50 rounded-xl p-4 border">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="font-medium text-gray-700">Want to analyze a PR manually?</p>
+              <p className="text-sm text-gray-500">Use the Manual PR Compliance tab to analyze specific PRs on-demand</p>
+            </div>
+            <button
+              onClick={() => {
+                window.dispatchEvent(new CustomEvent('navigate', { detail: 'llm-compliance-analysis' }));
+              }}
+              className="flex items-center gap-2 px-4 py-2 bg-white border rounded-lg text-gray-700 hover:bg-gray-50 transition text-sm font-medium"
+            >
+              Go to Manual Analysis
+              <ExternalLink className="w-4 h-4" />
+            </button>
           </div>
-        </div>
-        
-        <div className="mt-4 text-sm text-gray-600">
-          <p><strong>Setup Instructions:</strong></p>
-          <ol className="list-decimal list-inside mt-2 space-y-1">
-            <li>Go to your repository settings → Webhooks</li>
-            <li>Add the appropriate webhook URL above</li>
-            <li>Set content type to <code className="bg-gray-200 px-1 rounded">application/json</code></li>
-            <li>Select events: <em>Push</em> and <em>Pull Request</em></li>
-            <li>Optionally set a secret and configure it in your <code>.env</code> file</li>
-          </ol>
         </div>
       </div>
     </div>

@@ -162,17 +162,6 @@ export default function Home() {
                     Specifications
                   </button>
                   <button
-                    onClick={() => setCurrentView('git')}
-                    className={`px-4 py-3 font-medium transition flex items-center gap-2 ${
-                      currentView === 'git'
-                        ? 'border-b-2 border-primary-600 text-primary-600'
-                        : 'text-gray-600 hover:text-gray-800'
-                    }`}
-                  >
-                    <GitBranch size={18} />
-                    Git Analysis
-                  </button>
-                  <button
                     onClick={() => setCurrentView('llm-compliance-analysis')}
                     className={`px-4 py-3 font-medium transition flex items-center gap-2 ${
                       currentView === 'llm-compliance-analysis'
@@ -181,7 +170,18 @@ export default function Home() {
                     }`}
                   >
                     <ShieldCheck size={18} />
-                    LLM Compliance Analysis
+                    Manual PR Compliance
+                  </button>
+                  <button
+                    onClick={() => setCurrentView('git')}
+                    className={`px-4 py-3 font-medium transition flex items-center gap-2 ${
+                      currentView === 'git'
+                        ? 'border-b-2 border-primary-600 text-primary-600'
+                        : 'text-gray-600 hover:text-gray-800'
+                    }`}
+                  >
+                    <GitBranch size={18} />
+                    Automated CI/CD
                   </button>
                 </>
               )}
