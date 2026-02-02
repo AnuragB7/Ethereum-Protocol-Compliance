@@ -1,27 +1,39 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { Settings, Upload, BarChart3, Save, Book, GitBranch, ShieldCheck } from 'lucide-react';
+import { Settings, Upload, BarChart3, Save, Book, GitBranch, ShieldCheck, Info } from 'lucide-react';
 import UploadStep from '../components/UploadStep';
 import StatsView from '../components/StatsView';
 import SpecificationManager from '../components/SpecificationManager';
 import GitAnalysisView from '../components/GitAnalysisView';
 import PRAnalysisView from '../components/PRAnalysisView';
-import { configureAPI, healthCheck } from '../lib/api';
+import { configureAPI, healthCheck, APIConfig } from '../lib/api';
 import '../styles/globals.css';
 
 type View = 'config' | 'upload' | 'stats' | 'specs' | 'git' | 'llm-compliance-analysis';
+type Provider = 'openai' | 'anthropic';
+
+// Default models for each provider
+const DEFAULT_MODELS: Record<Provider, { llm: string; embed: string }> = {
+  openai: { llm: 'gpt-4', embed: 'text-embedding-ada-002' },
+  anthropic: { llm: 'claude-sonnet-4-20250514', embed: 'text-embedding-ada-002' }
+};
 
 export default function Home() {
   const [currentView, setCurrentView] = useState<View>('config');
   const [configured, setConfigured] = useState(false);
   const [uploaded, setUploaded] = useState(false);
-  const [apiConfig, setApiConfig] = useState({
+  const [provider, setProvider] = useState<Provider>('openai');
+  const [apiConfig, setApiConfig] = useState<APIConfig>({
+    provider: 'openai',
     api_key: '',
     api_base: '',
-    llm_model: 'gpt-4.1',
+    llm_model: 'gpt-4',
     embed_model: 'text-embedding-ada-002',
+    embed_api_key: '',
+    embed_api_base: '',
   });
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const [configuring, setConfiguring] = useState(false);
   const [error, setError] = useState('');
 
@@ -54,9 +66,33 @@ export default function Home() {
     }
   };
 
+  // Handle provider change
+  const handleProviderChange = (newProvider: Provider) => {
+    setProvider(newProvider);
+    setApiConfig(prev => ({
+      ...prev,
+      provider: newProvider,
+      llm_model: DEFAULT_MODELS[newProvider].llm,
+      // Clear api_base when switching to Anthropic (not needed)
+      api_base: newProvider === 'anthropic' ? '' : prev.api_base,
+    }));
+  };
+
   const handleConfigure = async () => {
-    if (!apiConfig.api_key || !apiConfig.api_base) {
-      setError('Please fill in all required fields');
+    // Validate required fields based on provider
+    if (!apiConfig.api_key) {
+      setError('API Key is required');
+      return;
+    }
+    
+    if (provider === 'openai' && !apiConfig.api_base) {
+      setError('API Base URL is required for OpenAI provider');
+      return;
+    }
+    
+    // For Anthropic with embeddings, either use same key or require separate embedding key
+    if (provider === 'anthropic' && !apiConfig.embed_api_key && !apiConfig.api_key) {
+      setError('Embedding API Key is required (Anthropic does not support embeddings)');
       return;
     }
 
@@ -64,7 +100,15 @@ export default function Home() {
     setError('');
 
     try {
-      await configureAPI(apiConfig);
+      const configToSend: APIConfig = {
+        ...apiConfig,
+        provider,
+        // For Anthropic, embeddings need OpenAI credentials
+        embed_api_key: provider === 'anthropic' ? (apiConfig.embed_api_key || '') : undefined,
+        embed_api_base: provider === 'anthropic' ? (apiConfig.embed_api_base || 'https://api.openai.com/v1') : undefined,
+      };
+      
+      await configureAPI(configToSend);
       setConfigured(true);
       setCurrentView('upload');
     } catch (err: any) {
@@ -196,9 +240,43 @@ export default function Home() {
           <div className="max-w-2xl mx-auto p-6 bg-white rounded-lg shadow-lg">
             <h2 className="text-2xl font-bold mb-6 text-gray-800">API Configuration</h2>
             <div className="space-y-4">
+              {/* Provider Selection */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-3">
+                  LLM Provider *
+                </label>
+                <div className="grid grid-cols-2 gap-3">
+                  <button
+                    type="button"
+                    onClick={() => handleProviderChange('openai')}
+                    className={`p-4 rounded-lg border-2 text-left transition ${
+                      provider === 'openai'
+                        ? 'border-primary-500 bg-primary-50 ring-2 ring-primary-200'
+                        : 'border-gray-200 hover:border-gray-300'
+                    }`}
+                  >
+                    <div className="font-semibold text-gray-800">OpenAI / Compatible</div>
+                    <div className="text-xs text-gray-500 mt-1">GPT-4, Azure, Local LLMs</div>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleProviderChange('anthropic')}
+                    className={`p-4 rounded-lg border-2 text-left transition ${
+                      provider === 'anthropic'
+                        ? 'border-primary-500 bg-primary-50 ring-2 ring-primary-200'
+                        : 'border-gray-200 hover:border-gray-300'
+                    }`}
+                  >
+                    <div className="font-semibold text-gray-800">Anthropic</div>
+                    <div className="text-xs text-gray-500 mt-1">Claude 3.5, Claude 3</div>
+                  </button>
+                </div>
+              </div>
+
+              {/* API Key */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
-                  API Key *
+                  {provider === 'anthropic' ? 'Anthropic API Key' : 'API Key'} *
                 </label>
                 <input
                   type="password"
@@ -207,23 +285,29 @@ export default function Home() {
                     setApiConfig({ ...apiConfig, api_key: e.target.value })
                   }
                   className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent"
-                  placeholder="your-api-key"
+                  placeholder={provider === 'anthropic' ? 'sk-ant-...' : 'your-api-key'}
                 />
               </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  API Base URL *
-                </label>
-                <input
-                  type="text"
-                  value={apiConfig.api_base}
-                  onChange={(e) =>
-                    setApiConfig({ ...apiConfig, api_base: e.target.value })
-                  }
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent"
-                  placeholder="https://api.openai.com/v1"
-                />
-              </div>
+
+              {/* API Base URL - Only for OpenAI */}
+              {provider === 'openai' && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    API Base URL *
+                  </label>
+                  <input
+                    type="text"
+                    value={apiConfig.api_base}
+                    onChange={(e) =>
+                      setApiConfig({ ...apiConfig, api_base: e.target.value })
+                    }
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+                    placeholder="https://api.openai.com/v1"
+                  />
+                </div>
+              )}
+
+              {/* LLM Model */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
                   LLM Model
@@ -235,9 +319,16 @@ export default function Home() {
                     setApiConfig({ ...apiConfig, llm_model: e.target.value })
                   }
                   className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent"
-                  placeholder="gpt-4.1"
+                  placeholder={DEFAULT_MODELS[provider].llm}
                 />
+                <p className="text-xs text-gray-500 mt-1">
+                  {provider === 'anthropic' 
+                    ? 'e.g., claude-sonnet-4-20250514, claude-3-5-sonnet-20241022, claude-3-opus-20240229'
+                    : 'e.g., gpt-4, gpt-4-turbo, gpt-4o, gpt-3.5-turbo'
+                  }
+                </p>
               </div>
+              {/* Embedding Model */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
                   Embedding Model
@@ -251,7 +342,72 @@ export default function Home() {
                   className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent"
                   placeholder="text-embedding-ada-002"
                 />
+                <p className="text-xs text-gray-500 mt-1">
+                  Embeddings always use OpenAI API (text-embedding-ada-002 or text-embedding-3-small)
+                </p>
               </div>
+
+              {/* Anthropic Embedding Notice */}
+              {provider === 'anthropic' && (
+                <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg">
+                  <div className="flex items-start gap-3">
+                    <Info size={20} className="text-blue-600 flex-shrink-0 mt-0.5" />
+                    <div>
+                      <p className="text-sm font-medium text-blue-800">
+                        OpenAI API Key Required for Embeddings
+                      </p>
+                      <p className="text-sm text-blue-700 mt-1">
+                        Anthropic doesn't provide embedding models. You'll need an OpenAI API key for embeddings.
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => setShowAdvanced(!showAdvanced)}
+                        className="text-sm text-blue-600 hover:text-blue-800 mt-2 underline"
+                      >
+                        {showAdvanced ? 'Hide' : 'Show'} embedding configuration
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Advanced: Separate Embedding Credentials (for Anthropic) */}
+              {provider === 'anthropic' && showAdvanced && (
+                <div className="p-4 bg-gray-50 rounded-lg border space-y-3">
+                  <p className="text-sm font-medium text-gray-700">Embedding API Configuration</p>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">
+                      OpenAI API Key (for embeddings)
+                    </label>
+                    <input
+                      type="password"
+                      value={apiConfig.embed_api_key || ''}
+                      onChange={(e) =>
+                        setApiConfig({ ...apiConfig, embed_api_key: e.target.value })
+                      }
+                      className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+                      placeholder="sk-..."
+                    />
+                    <p className="text-xs text-gray-500 mt-1">
+                      Leave empty to use the main API key (will fail if using Anthropic key)
+                    </p>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">
+                      Embedding API Base URL
+                    </label>
+                    <input
+                      type="text"
+                      value={apiConfig.embed_api_base || ''}
+                      onChange={(e) =>
+                        setApiConfig({ ...apiConfig, embed_api_base: e.target.value })
+                      }
+                      className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+                      placeholder="https://api.openai.com/v1"
+                    />
+                  </div>
+                </div>
+              )}
 
               {error && (
                 <div className="p-4 bg-red-50 border border-red-200 rounded-lg text-red-700">

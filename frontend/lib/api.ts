@@ -26,13 +26,24 @@ export const apiLongRunning = axios.create({
 });
 
 // API Configuration
-export const configureAPI = async (config: {
+export interface APIConfig {
+  provider: 'openai' | 'anthropic';
   api_key: string;
-  api_base: string;
+  api_base?: string;  // Required for OpenAI, optional for Anthropic
   llm_model?: string;
   embed_model?: string;
-}) => {
+  embed_api_key?: string;  // Separate key for embeddings (useful for Anthropic)
+  embed_api_base?: string;  // Separate base for embeddings
+}
+
+export const configureAPI = async (config: APIConfig) => {
   const response = await api.post('/api/config', config);
+  return response.data;
+};
+
+// Get available providers
+export const getProviders = async () => {
+  const response = await api.get('/api/config/providers');
   return response.data;
 };
 
