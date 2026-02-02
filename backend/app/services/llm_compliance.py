@@ -23,6 +23,14 @@ from llama_index.core import Settings
 from llama_index.core.schema import NodeWithScore
 from llama_index.llms.openai_like import OpenAILike
 
+# Try to import Anthropic support
+try:
+    from llama_index.llms.anthropic import Anthropic
+    ANTHROPIC_AVAILABLE = True
+except ImportError:
+    ANTHROPIC_AVAILABLE = False
+    Anthropic = None
+
 logger = logging.getLogger(__name__)
 
 
@@ -319,7 +327,8 @@ Only include deviations you are confident about. Do not make up issues."""
         code_indexer=None,
         api_key: str = None,
         api_base: str = None,
-        llm_model: str = "gpt-4"
+        llm_model: str = "gpt-4",
+        provider: str = "openai"
     ):
         """
         Initialize the LLM Compliance Analyzer.
@@ -330,21 +339,39 @@ Only include deviations you are confident about. Do not make up issues."""
             api_key: API key for LLM
             api_base: API base URL
             llm_model: LLM model name
+            provider: LLM provider ('openai' or 'anthropic')
         """
         self.spec_indexer = spec_indexer
         self.code_indexer = code_indexer
+        self.provider = provider.lower() if provider else "openai"
         
         # Use provided credentials or fall back to Settings
-        if api_key and api_base:
-            self.llm = OpenAILike(
-                model=llm_model,
-                api_base=api_base,
-                api_key=api_key,
-                is_chat_model=True,
-                context_window=8192,
-                max_tokens=4096,
-                temperature=0,
-            )
+        if api_key:
+            if self.provider == "anthropic":
+                if not ANTHROPIC_AVAILABLE:
+                    raise ImportError(
+                        "Anthropic provider requested but llama-index-llms-anthropic is not installed. "
+                        "Run: pip install llama-index-llms-anthropic"
+                    )
+                self.llm = Anthropic(
+                    model=llm_model,
+                    api_key=api_key,
+                    max_tokens=4096,
+                    temperature=0,
+                )
+                logger.info(f"LLM Compliance Analyzer using Anthropic: {llm_model}")
+            else:
+                # OpenAI or OpenAI-compatible
+                self.llm = OpenAILike(
+                    model=llm_model,
+                    api_base=api_base,
+                    api_key=api_key,
+                    is_chat_model=True,
+                    context_window=8192,
+                    max_tokens=4096,
+                    temperature=0,
+                )
+                logger.info(f"LLM Compliance Analyzer using OpenAI-compatible: {llm_model}")
         else:
             self.llm = Settings.llm
         

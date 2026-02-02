@@ -64,9 +64,14 @@ def _get_spec_indexer():
         
         from app.services.spec_indexer import SpecificationIndexer
         
+        # For spec indexer, we need embeddings (always OpenAI) and LLM
+        # Use embed_api_key/embed_api_base if available, otherwise fallback
+        embed_api_key = deps.api_config.get("embed_api_key") or deps.api_config["api_key"]
+        embed_api_base = deps.api_config.get("embed_api_base") or deps.api_config.get("api_base") or "https://api.openai.com/v1"
+        
         deps.spec_indexer = SpecificationIndexer(
-            api_key=deps.api_config["api_key"],
-            api_base=deps.api_config["api_base"],
+            api_key=embed_api_key,
+            api_base=embed_api_base,
             embed_model=deps.api_config.get("embed_model", "text-embedding-ada-002"),
             llm_model=deps.api_config.get("llm_model", "gpt-4"),
         )
@@ -81,12 +86,16 @@ def _get_llm_compliance_analyzer():
         
         from app.services.llm_compliance import LLMComplianceAnalyzer
         
+        # Get provider from config (defaults to openai)
+        provider = deps.api_config.get("provider", "openai")
+        
         deps.llm_compliance_analyzer = LLMComplianceAnalyzer(
             spec_indexer=spec_indexer,
             code_indexer=deps.indexer,
             api_key=deps.api_config["api_key"],
-            api_base=deps.api_config["api_base"],
+            api_base=deps.api_config.get("api_base") or "https://api.openai.com/v1",
             llm_model=deps.api_config.get("llm_model", "gpt-4"),
+            provider=provider,
         )
     
     return deps.llm_compliance_analyzer

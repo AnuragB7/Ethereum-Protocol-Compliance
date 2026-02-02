@@ -15,6 +15,10 @@ llama-index-llms-openai>=0.6.0,<0.7
 llama-index-llms-openai-like>=0.5.0,<0.6
 llama-index-embeddings-openai>=0.3.0
 
+# Anthropic Claude support
+llama-index-llms-anthropic>=0.6.0
+anthropic>=0.39.0
+
 # Qdrant Vector Store for Hybrid Search (specs)
 llama-index-vector-stores-qdrant>=0.4.0
 qdrant-client>=1.7.0

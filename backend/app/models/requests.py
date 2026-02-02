@@ -10,10 +10,13 @@ from pydantic import BaseModel, Field
 
 class ConfigureRequest(BaseModel):
     """Request to configure the API with LLM settings."""
+    provider: str = Field(default="openai", description="LLM provider: 'openai' or 'anthropic'")
     api_key: str = Field(..., description="API key for the LLM service")
-    api_base: str = Field(..., description="Base URL for the API")
+    api_base: Optional[str] = Field(default=None, description="Base URL for the API (required for OpenAI, optional for Anthropic)")
     llm_model: str = Field(default="gpt-4", description="LLM model name")
-    embed_model: str = Field(default="text-embedding-ada-002", description="Embedding model name")
+    embed_model: str = Field(default="text-embedding-ada-002", description="Embedding model name (OpenAI embedding model)")
+    embed_api_key: Optional[str] = Field(default=None, description="Separate API key for embeddings (if using different provider)")
+    embed_api_base: Optional[str] = Field(default=None, description="Separate API base for embeddings")
     storage_dir: Optional[str] = Field(default="./graph_storage", description="Storage directory path")
 
 

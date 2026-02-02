@@ -1,6 +1,10 @@
 """
 Code Graph Indexer - Extended version of hybrid_search_rag.py for code analysis
 Ingests codebases and builds property graphs for analysis
+
+Supports multiple LLM providers:
+- OpenAI (and OpenAI-compatible APIs)
+- Anthropic (Claude models)
 """
 
 import os
@@ -10,10 +14,17 @@ from pathlib import Path
 
 from llama_index.core import Document, Settings
 from llama_index.llms.openai import OpenAI
-# from llama_index.llms.openai_like import OpenAILike
 from llama_index.llms.openai_like import OpenAILike
-
 from llama_index.embeddings.openai import OpenAIEmbedding
+
+# Try to import Anthropic support
+try:
+    from llama_index.llms.anthropic import Anthropic
+    ANTHROPIC_AVAILABLE = True
+except ImportError:
+    ANTHROPIC_AVAILABLE = False
+    Anthropic = None
+
 from llama_index.core.indices.property_graph import (
     PropertyGraphIndex,
     LLMSynonymRetriever,
@@ -27,29 +38,67 @@ from app.core.parsers import CodebaseParser, CodeEntity, CodeRelationship
 # Logging
 logging.getLogger("llama_index").setLevel(logging.ERROR)
 
+# Default models for each provider
+DEFAULT_MODELS = {
+    "openai": "gpt-4",
+    "anthropic": "claude-sonnet-4-20250514"
+}
+
+DEFAULT_EMBED_MODELS = {
+    "openai": "text-embedding-ada-002"
+}
+
 
 class CodeGraphIndexer:
     """
-    Manages code ingestion and graph-based indexing for multi-language codebases
+    Manages code ingestion and graph-based indexing for multi-language codebases.
+    Supports multiple LLM providers: OpenAI (and compatible), Anthropic.
     """
     
-    def __init__(self, api_key: str, api_base: str, llm_model: str = "gpt-4.1", 
-                 embed_model: str = "text-embedding-ada-002", persist_dir: str = "./graph_storage"):
+    def __init__(
+        self, 
+        api_key: str, 
+        api_base: Optional[str] = None, 
+        llm_model: str = "gpt-4.1", 
+        embed_model: str = "text-embedding-ada-002", 
+        persist_dir: str = "./graph_storage",
+        provider: str = "openai",
+        embed_api_key: Optional[str] = None,
+        embed_api_base: Optional[str] = None
+    ):
         """
         Initialize the Code Graph Indexer
         
         Args:
             api_key: API key for LLM service
-            api_base: Base URL for API
+            api_base: Base URL for API (required for OpenAI, optional for Anthropic)
             llm_model: Name of LLM model
             embed_model: Name of embedding model
             persist_dir: Directory to persist graph data
+            provider: LLM provider ('openai' or 'anthropic')
+            embed_api_key: Separate API key for embeddings (defaults to api_key)
+            embed_api_base: Separate API base for embeddings (defaults to api_base)
         """
         self.api_key = api_key
         self.api_base = api_base
         self.llm_model = llm_model
         self.embed_model = embed_model
         self.persist_dir = Path(persist_dir)
+        self.provider = provider.lower()
+        
+        # For embeddings (can use different credentials if needed)
+        self.embed_api_key = embed_api_key or api_key
+        self.embed_api_base = embed_api_base or api_base
+        
+        # Validate provider
+        if self.provider not in ["openai", "anthropic"]:
+            raise ValueError(f"Unsupported provider: {self.provider}. Use 'openai' or 'anthropic'")
+        
+        if self.provider == "anthropic" and not ANTHROPIC_AVAILABLE:
+            raise ValueError(
+                "Anthropic provider requested but llama-index-llms-anthropic is not installed. "
+                "Run: pip install llama-index-llms-anthropic"
+            )
         
         # Create persist directory if it doesn't exist
         self.persist_dir.mkdir(parents=True, exist_ok=True)
@@ -73,8 +122,21 @@ class CodeGraphIndexer:
         self._load_persisted_data()
     
     def _setup_llm_settings(self):
-        """Configure LLM and embedding models"""
-        print(f"🔗 Connecting to API at: {self.api_base}")
+        """Configure LLM and embedding models based on provider"""
+        print(f"🔗 Setting up LLM provider: {self.provider}")
+        
+        if self.provider == "anthropic":
+            self._setup_anthropic()
+        else:
+            self._setup_openai()
+        
+        # Embeddings always use OpenAI (Anthropic doesn't have embedding models)
+        self._setup_embeddings()
+    
+    def _setup_openai(self):
+        """Configure OpenAI or OpenAI-compatible LLM"""
+        print(f"   Using OpenAI-compatible API at: {self.api_base}")
+        print(f"   Model: {self.llm_model}")
         
         # Use OpenAILike for custom model names (bypasses OpenAI model validation)
         Settings.llm = OpenAILike(
@@ -86,11 +148,37 @@ class CodeGraphIndexer:
             max_tokens=2048,         # Maximum tokens in generated response
             temperature=0,           # Low temperature = deterministic responses
         )
+    
+    def _setup_anthropic(self):
+        """Configure Anthropic Claude LLM"""
+        print(f"   Using Anthropic Claude")
+        print(f"   Model: {self.llm_model}")
+        
+        if not ANTHROPIC_AVAILABLE:
+            raise ImportError("llama-index-llms-anthropic is not installed")
+        
+        Settings.llm = Anthropic(
+            model=self.llm_model,
+            api_key=self.api_key,
+            max_tokens=4096,
+            temperature=0,
+        )
+    
+    def _setup_embeddings(self):
+        """Configure embedding model (always uses OpenAI for now)"""
+        # Note: Anthropic doesn't have embedding models, so we always use OpenAI embeddings
+        # Users can provide separate embed_api_key and embed_api_base for this purpose
+        
+        if not self.embed_api_base:
+            # Default to OpenAI's API for embeddings
+            self.embed_api_base = "https://api.openai.com/v1"
+        
+        print(f"   Embeddings: {self.embed_model} via {self.embed_api_base}")
         
         Settings.embed_model = OpenAIEmbedding(
             model_name=self.embed_model,
-            api_base=self.api_base,
-            api_key=self.api_key
+            api_base=self.embed_api_base,
+            api_key=self.embed_api_key
         )
     
     def ingest_codebase(self, codebase_path: str) -> Dict[str, Any]:
