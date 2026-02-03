@@ -1315,6 +1315,10 @@ async def run_dual_analysis(
     Returns:
         Combined results from the analysis
     """
+    # Track overall analysis start time
+    analysis_start_time = time.time()
+    deep_start_time = None  # Will be set when deep analysis starts
+    
     def report_progress(stage: str, progress: int):
         """Report progress via callback if provided"""
         if progress_callback:
@@ -1371,6 +1375,7 @@ async def run_dual_analysis(
         
         # Run deep analysis if requested
         if run_deep:
+            deep_start_time = time.time()  # Track deep analysis start
             report_progress("Starting deep analysis - fetching PR info...", 20 if not run_quick else 35)
             
             # Get PR info first
@@ -1448,11 +1453,12 @@ async def run_dual_analysis(
                     entities, relationships, graph_stats
                 )
                 
-                # Build result
+                # Build result with calculated duration
+                deep_duration = time.time() - deep_start_time if deep_start_time else 0
                 deep_result = AnalysisResult(
                     mode=AnalysisMode.DEEP,
                     success=True,
-                    duration_seconds=0,  # Will be calculated
+                    duration_seconds=deep_duration,
                     deviations=deviations,
                     entities_analyzed=len(entities),
                     files_analyzed=graph_stats.total_files,
@@ -1467,10 +1473,11 @@ async def run_dual_analysis(
                 # Cleanup temp directory
                 analyzer._cleanup_temp_dir(repo_path)
             else:
+                deep_duration = time.time() - deep_start_time if deep_start_time else 0
                 deep_result = AnalysisResult(
                     mode=AnalysisMode.DEEP,
                     success=False,
-                    duration_seconds=0,
+                    duration_seconds=deep_duration,
                     deviations=[],
                     error="Failed to clone repository"
                 )

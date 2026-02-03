@@ -13,11 +13,16 @@ Usage:
 """
 
 import argparse
+import logging
 import uvicorn
 from dotenv import load_dotenv
 
 # Load environment variables
 load_dotenv()
+
+# Configure logging to suppress noisy HTTP request logs
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 
 def main():

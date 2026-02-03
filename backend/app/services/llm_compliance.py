@@ -1025,6 +1025,23 @@ Only include deviations you are confident about. Do not make up issues. It's bet
                 spec_ref = item.get("spec_reference", "unknown")
                 rule_id = f"SPEC-{spec_file}:{spec_ref[:50]}"
                 
+                # Extract file location from LLM response if available
+                # LLM may return "file", "file_path", or "location"
+                llm_file = item.get("file") or item.get("file_path") or item.get("location") or ""
+                llm_line = item.get("line") or item.get("line_number") or ""
+                
+                # Build code_location from LLM response if available
+                if llm_file:
+                    if llm_line:
+                        actual_code_location = f"{llm_file}:{llm_line}"
+                    else:
+                        actual_code_location = llm_file
+                else:
+                    actual_code_location = code_location
+                
+                # Use file as entity_name for batch analysis
+                actual_entity_name = llm_file if llm_file else entity_name
+                
                 deviation = LLMDeviation(
                     rule_id=rule_id,
                     spec_reference=item.get("spec_reference", ""),
@@ -1035,8 +1052,8 @@ Only include deviations you are confident about. Do not make up issues. It's bet
                     description=item.get("description", ""),
                     explanation=item.get("explanation", ""),
                     recommendation=item.get("recommendation", ""),
-                    code_location=code_location,
-                    entity_name=entity_name,
+                    code_location=actual_code_location,
+                    entity_name=actual_entity_name,
                     confidence=float(item.get("confidence", 0.7)),
                     eip_references=item.get("eip_references", [])
                 )
@@ -1351,7 +1368,7 @@ If all changes comply with specifications, respond with "NO_DEVIATIONS_FOUND".
 
 ## Response Format
 
-Respond with a JSON array:
+Respond with a JSON array. IMPORTANT: Always include the specific file path and line numbers where issues are found.
 
 ```json
 [
@@ -1365,11 +1382,15 @@ Respond with a JSON array:
     "explanation": "Why the code doesn't comply",
     "recommendation": "How to fix",
     "file": "path/to/affected/file.go",
+    "line": "42-45",
     "eip_references": ["EIP-XXXX"],
     "confidence": 0.85
   }}
 ]
 ```
+
+CRITICAL: The "file" field must contain the exact file path from the diff (e.g., "consensus/beacon/consensus.go").
+The "line" field should indicate the affected line numbers from the diff where possible (e.g., "42", "42-50", or "+42" for new lines).
 
 Only report issues you're confident about."""
         
