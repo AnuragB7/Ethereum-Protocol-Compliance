@@ -262,6 +262,17 @@ export default function PRAnalysisView() {
       }
       // If still running or pending, keep polling
     } catch (err: any) {
+      // If we get a 404, the job doesn't exist - stop polling silently
+      if (err.response?.status === 404) {
+        console.log('Job not found (404), stopping poll for:', id);
+        setJobId(null);
+        setJobStatus(null);
+        if (pollingInterval) {
+          clearInterval(pollingInterval);
+          setPollingInterval(null);
+        }
+        return;
+      }
       console.error('Failed to poll job status:', err);
     }
   };
