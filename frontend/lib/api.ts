@@ -464,6 +464,7 @@ export interface PRAnalysisResult {
     files_analyzed: number;
     critical_count: number;
     warning_count: number;
+    error?: string;
     commit_sha?: string;
     commits?: PRCommit[];
     total_commits?: number;
