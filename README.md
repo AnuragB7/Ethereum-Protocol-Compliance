@@ -8,12 +8,12 @@
 
 <p align="center">
   <a href="https://youtu.be/OZlg6TE-lNQ">
-    <img src="https://img.youtube.com/vi/OZlg6TE-lNQ/maxresdefault.jpg" alt="Watch Demo" />
+    <img src="https://img.youtube.com/vi/OZlg6TE-lNQ/hqdefault.jpg" width="720" alt="Watch Demo Video"/>
   </a>
 </p>
 
 <p align="center">
-  <a href="https://youtu.be/OZlg6TE-lNQ">▶ Watch Full Demo on YouTube</a>
+  ▶ <a href="https://youtu.be/OZlg6TE-lNQ">Watch Full Demo on YouTube</a>
 </p>
 
 <p align="center">
