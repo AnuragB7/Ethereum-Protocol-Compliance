@@ -1,0 +1,39 @@
+# Environment
+.env
+.env.*
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+# Cache
+.eip_cache/
+
+# Storage / Data
+graph_storage/
+test_output/
+*.pkl
+
+# Node
+node_modules/
+.next/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Workspace folders tracked on feature branches
+backend/
+backend-worktree/
+execution-specs/
+frontend/
