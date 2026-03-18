@@ -1,8 +1,8 @@
 'use client';
 
 import React, { useState } from 'react';
-import { Upload, Folder, Check, AlertCircle, Trash2 } from 'lucide-react';
-import { uploadCodebase, uploadFolder, resetGraph } from '../lib/api';
+import { Upload, Folder, Check, AlertCircle, Trash2, GitBranch } from 'lucide-react';
+import { uploadCodebase, uploadFolder, uploadFolderIncremental, resetGraph } from '../lib/api';
 
 interface UploadStepProps {
   onUploadSuccess: (data: any) => void;
@@ -11,6 +11,7 @@ interface UploadStepProps {
 export default function UploadStep({ onUploadSuccess }: UploadStepProps) {
   const [uploadMode, setUploadMode] = useState<'file' | 'folder'>('file');
   const [folderPath, setFolderPath] = useState('');
+  const [incremental, setIncremental] = useState(true);
   const [uploading, setUploading] = useState(false);
   const [resetting, setResetting] = useState(false);
   const [error, setError] = useState('');
@@ -51,8 +52,24 @@ export default function UploadStep({ onUploadSuccess }: UploadStepProps) {
     setSuccess('');
 
     try {
-      const result = await uploadFolder(folderPath);
-      setSuccess('Codebase indexed successfully!');
+      const result = incremental
+        ? await uploadFolderIncremental(folderPath)
+        : await uploadFolder(folderPath);
+
+      // Build a descriptive success message
+      if (result.skipped) {
+        setSuccess('✅ Codebase unchanged — no re-indexing needed (Merkle root identical).');
+      } else if (result.incremental) {
+        const a = result.added_files ?? 0;
+        const m = result.modified_files ?? 0;
+        const d = result.deleted_files ?? 0;
+        setSuccess(
+          `⚡ Incremental ingestion complete: ${a} added, ${m} modified, ${d} deleted. ` +
+          `Graph now has ${result.entities_extracted} entities.`
+        );
+      } else {
+        setSuccess('Codebase indexed successfully!');
+      }
       onUploadSuccess(result);
     } catch (err: any) {
       setError(err.response?.data?.detail || 'Indexing failed');
@@ -158,12 +175,43 @@ export default function UploadStep({ onUploadSuccess }: UploadStepProps) {
               disabled={uploading}
             />
           </div>
+
+          {/* Incremental toggle */}
+          <div className="flex items-center justify-between p-3 bg-gray-50 rounded-lg border border-gray-200">
+            <div className="flex items-center gap-2">
+              <GitBranch size={18} className="text-primary-600" />
+              <div>
+                <span className="text-sm font-medium text-gray-800">Incremental Ingestion (Merkle Tree)</span>
+                <p className="text-xs text-gray-500">Only re-parse changed files — skips unchanged code</p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setIncremental(!incremental)}
+              className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                incremental ? 'bg-primary-600' : 'bg-gray-300'
+              }`}
+              disabled={uploading}
+            >
+              <span
+                className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                  incremental ? 'translate-x-6' : 'translate-x-1'
+                }`}
+              />
+            </button>
+          </div>
+
           <button
             onClick={handleFolderUpload}
             disabled={uploading}
             className="w-full py-3 px-4 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition disabled:bg-gray-400"
           >
-            {uploading ? 'Processing...' : 'Index Codebase'}
+            {uploading
+              ? 'Processing...'
+              : incremental
+              ? 'Index Codebase (Incremental)'
+              : 'Index Codebase (Full)'
+            }
           </button>
         </div>
       )}

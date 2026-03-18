@@ -68,6 +68,14 @@ export const uploadFolder = async (path: string) => {
   return response.data;
 };
 
+// Upload folder incrementally (Merkle-tree — only re-indexes changed files)
+export const uploadFolderIncremental = async (path: string) => {
+  const response = await apiLongRunning.post('/api/upload-folder-incremental', null, {
+    params: { codebase_path: path },
+  });
+  return response.data;
+};
+
 // Reset graph data
 export const resetGraph = async () => {
   const response = await api.post('/api/reset');
