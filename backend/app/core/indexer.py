@@ -9,7 +9,7 @@ Supports multiple LLM providers:
 
 import os
 import logging
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Set
 from pathlib import Path
 
 from llama_index.core import Document, Settings
@@ -34,6 +34,7 @@ from llama_index.core.indices.property_graph import (
 from llama_index.core.query_engine import RetrieverQueryEngine
 
 from app.core.parsers import CodebaseParser, CodeEntity, CodeRelationship
+from app.core.merkle_tree import MerkleTree
 
 # Logging
 logging.getLogger("llama_index").setLevel(logging.ERROR)
@@ -117,6 +118,9 @@ class CodeGraphIndexer:
         self.entities: List[CodeEntity] = []
         self.relationships: List[CodeRelationship] = []
         self._data_loaded = False  # Flag to track if data was loaded from disk
+
+        # Merkle tree for incremental ingestion
+        self.merkle_tree = MerkleTree(persist_dir)
         
         # Try to load existing index
         self._load_persisted_data()
@@ -225,9 +229,132 @@ class CodeGraphIndexer:
         
         # Persist the data to disk
         self._persist_data()
+
+        # Snapshot Merkle state so the next ingestion can be incremental
+        self.merkle_tree.update(codebase_path)
         
         return parsed_data
     
+    # ------------------------------------------------------------------
+    # Incremental (Merkle-tree-based) ingestion
+    # ------------------------------------------------------------------
+
+    def ingest_incremental(self, codebase_path: str) -> Dict[str, Any]:
+        """
+        Incrementally ingest a codebase using a Merkle tree.
+
+        Only files that were added or modified since the last ingestion are
+        re-parsed.  Entities/relationships belonging to deleted or modified
+        files are removed before the new ones are merged in, so the graph
+        always reflects the current state of the code.
+
+        If no previous Merkle state exists (first run) this falls back to
+        a full ingestion automatically.
+
+        Returns:
+            Statistics dict including an ``incremental`` key that describes
+            exactly what changed.
+        """
+        # If there is no prior state, do a full ingest and snapshot.
+        if not self.merkle_tree.has_state:
+            print("ℹ️  No previous Merkle state — running full ingestion…")
+            result = self.ingest_codebase(codebase_path)
+            self.merkle_tree.update(codebase_path)
+            result["incremental"] = False
+            return result
+
+        print(f"\n{'='*80}")
+        print(f"INCREMENTAL INGESTION: {codebase_path}")
+        print(f"{'='*80}\n")
+
+        # 1. Diff against stored Merkle tree
+        added, modified, deleted = self.merkle_tree.diff(codebase_path)
+        changed = added | modified
+
+        print(f"📊 Merkle diff results:")
+        print(f"   Added:    {len(added)} file(s)")
+        print(f"   Modified: {len(modified)} file(s)")
+        print(f"   Deleted:  {len(deleted)} file(s)")
+
+        if not changed and not deleted:
+            print("\n✅ Codebase unchanged — nothing to do.")
+            self.merkle_tree.update(codebase_path)
+            return {
+                "incremental": True,
+                "skipped": True,
+                "added_files": 0,
+                "modified_files": 0,
+                "deleted_files": 0,
+                "total_entities": len(self.entities),
+                "total_relationships": len(self.relationships),
+            }
+
+        # 2. Collect the *absolute* paths of files that need to be purged
+        #    from the existing graph (modified files get purged then re-added).
+        purge_paths: Set[str] = deleted | modified
+
+        old_entity_count = len(self.entities)
+        old_rel_count = len(self.relationships)
+
+        # 3. Remove stale entities & relationships
+        if purge_paths:
+            self.entities = [
+                e for e in self.entities if e.file_path not in purge_paths
+            ]
+            self.relationships = [
+                r for r in self.relationships if r.file_path not in purge_paths
+            ]
+            purged_entities = old_entity_count - len(self.entities)
+            purged_rels = old_rel_count - len(self.relationships)
+            print(f"\n🗑️  Purged {purged_entities} entities and {purged_rels} relationships from changed/deleted files")
+
+        # 4. Parse only the new / modified files
+        new_entities: List[CodeEntity] = []
+        new_relationships: List[CodeRelationship] = []
+
+        if changed:
+            print(f"\n📋 Parsing {len(changed)} changed file(s)…")
+            parsed = self.parser.parse_files(list(changed))
+            new_entities = parsed["entities"]
+            new_relationships = parsed["relationships"]
+            print(f"   Extracted {len(new_entities)} entities, {len(new_relationships)} relationships")
+
+        # 5. Merge into the master lists
+        self.entities.extend(new_entities)
+        self.relationships.extend(new_relationships)
+
+        print(f"\n📈 Graph now has {len(self.entities)} entities, {len(self.relationships)} relationships")
+
+        # 6. Rebuild the PropertyGraph index from the merged data
+        print("\n🔨 Rebuilding Property Graph Index…")
+        documents = self._create_documents()
+        self.index = PropertyGraphIndex.from_documents(
+            documents,
+            show_progress=True,
+            use_async=False,
+        )
+        self._build_query_engine()
+        print("\n✨ Incremental index rebuilt!\n")
+
+        # 7. Persist everything (graph + Merkle snapshot)
+        self._persist_data()
+        self.merkle_tree.update(codebase_path)
+
+        return {
+            "incremental": True,
+            "skipped": False,
+            "added_files": len(added),
+            "modified_files": len(modified),
+            "deleted_files": len(deleted),
+            "new_entities": len(new_entities),
+            "new_relationships": len(new_relationships),
+            "total_entities": len(self.entities),
+            "total_relationships": len(self.relationships),
+            "entities": self.entities,
+            "relationships": self.relationships,
+            "total_files": len(set(e.file_path for e in self.entities)),
+        }
+
     def _create_documents(self) -> List[Document]:
         """
         Convert parsed code entities into LlamaIndex documents

@@ -1243,6 +1243,20 @@ class GoParser:
 
 class CodebaseParser:
     """Main parser that handles multiple languages"""
+
+    # Extension → parser-attribute mapping (shared by full and incremental parse)
+    EXTENSION_MAP = {
+        '.py': 'python_parser',
+        '.java': 'java_parser',
+        '.cob': 'cobol_parser',
+        '.cbl': 'cobol_parser',
+        '.js': 'js_parser',
+        '.jsx': 'js_parser',
+        '.ts': 'js_parser',
+        '.tsx': 'js_parser',
+        '.vue': 'js_parser',
+        '.go': 'go_parser',
+    }
     
     def __init__(self):
         self.python_parser = PythonParser()
@@ -1250,6 +1264,12 @@ class CodebaseParser:
         self.cobol_parser = CobolParser()
         self.js_parser = JavaScriptParser()
         self.go_parser = GoParser()
+
+    def _parser_for_file(self, file_path: str):
+        """Return the appropriate parser for *file_path*, or None."""
+        ext = Path(file_path).suffix.lower()
+        attr = self.EXTENSION_MAP.get(ext)
+        return getattr(self, attr) if attr else None
     
     def parse_codebase(self, root_path: str) -> Dict[str, Any]:
         """
@@ -1267,18 +1287,7 @@ class CodebaseParser:
         root = Path(root_path)
         
         # File extensions to parse
-        extensions = {
-            '.py': self.python_parser,
-            '.java': self.java_parser,
-            '.cob': self.cobol_parser,
-            '.cbl': self.cobol_parser,
-            '.js': self.js_parser,
-            '.jsx': self.js_parser,
-            '.ts': self.js_parser,
-            '.tsx': self.js_parser,
-            '.vue': self.js_parser,
-            '.go': self.go_parser,
-        }
+        extensions = {ext: getattr(self, attr) for ext, attr in self.EXTENSION_MAP.items()}
         
         for ext, parser in extensions.items():
             files = list(root.rglob(f'*{ext}'))
@@ -1303,5 +1312,43 @@ class CodebaseParser:
             'total_files': sum(len(list(root.rglob(f'*{ext}'))) for ext in extensions.keys()),
             'total_entities': len(all_entities),
             'total_relationships': len(all_relationships)
+        }
+
+    def parse_files(self, file_paths: List[str]) -> Dict[str, Any]:
+        """
+        Parse a specific set of files (for incremental ingestion).
+
+        Args:
+            file_paths: Absolute paths to files that should be (re-)parsed.
+
+        Returns:
+            Dictionary with entities and relationships extracted from
+            *only* the supplied files.
+        """
+        all_entities: List[CodeEntity] = []
+        all_relationships: List[CodeRelationship] = []
+        parsed_count = 0
+
+        for fp in file_paths:
+            parser = self._parser_for_file(fp)
+            if parser is None:
+                continue  # unsupported extension
+            try:
+                with open(fp, "r", encoding="utf-8", errors="ignore") as f:
+                    content = f.read()
+                entities, relationships = parser.parse_file(fp, content)
+                all_entities.extend(entities)
+                all_relationships.extend(relationships)
+                parsed_count += 1
+                print(f"Parsed: {Path(fp).name} - {len(entities)} entities, {len(relationships)} relationships")
+            except Exception as e:
+                print(f"Error parsing {fp}: {e}")
+
+        return {
+            "entities": all_entities,
+            "relationships": all_relationships,
+            "total_files": parsed_count,
+            "total_entities": len(all_entities),
+            "total_relationships": len(all_relationships),
         }
 

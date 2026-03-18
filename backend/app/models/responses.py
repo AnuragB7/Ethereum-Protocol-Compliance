@@ -112,6 +112,11 @@ class UploadResponse(BaseModel):
     files_processed: int = Field(default=0, description="Number of files processed")
     entities_extracted: int = Field(default=0, description="Number of entities extracted")
     relationships_found: int = Field(default=0, description="Number of relationships found")
+    incremental: Optional[bool] = Field(default=None, description="Whether this was an incremental ingestion")
+    added_files: Optional[int] = Field(default=None, description="Files added (incremental only)")
+    modified_files: Optional[int] = Field(default=None, description="Files modified (incremental only)")
+    deleted_files: Optional[int] = Field(default=None, description="Files deleted (incremental only)")
+    skipped: Optional[bool] = Field(default=None, description="True if no changes were detected")
 
 
 class SpecificationSummaryResponse(BaseModel):

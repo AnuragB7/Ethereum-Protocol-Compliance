@@ -24,6 +24,11 @@ def _run_ingest(indexer, codebase_path: str):
     return indexer.ingest_codebase(codebase_path)
 
 
+def _run_incremental_ingest(indexer, codebase_path: str):
+    """Run incremental (Merkle-tree) ingestion in a separate thread."""
+    return indexer.ingest_incremental(codebase_path)
+
+
 @router.post("/upload-folder", response_model=UploadResponse)
 async def upload_folder(codebase_path: str):
     """
@@ -55,6 +60,64 @@ async def upload_folder(codebase_path: str):
             relationships_found=result.get("relationships_count", len(deps.relationships))
         )
         
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/upload-folder-incremental", response_model=UploadResponse)
+async def upload_folder_incremental(codebase_path: str):
+    """
+    Incrementally ingest a codebase using a Merkle tree.
+
+    Only files that were added, modified, or deleted since the last
+    ingestion are re-parsed.  On the very first call this behaves
+    identically to /upload-folder (full ingestion).
+    """
+    if not deps.indexer:
+        raise HTTPException(status_code=400, detail="API not configured. Call /api/configure first.")
+
+    try:
+        import os
+        if not os.path.exists(codebase_path):
+            raise HTTPException(status_code=404, detail=f"Path not found: {codebase_path}")
+
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(
+            _executor, _run_incremental_ingest, deps.indexer, codebase_path
+        )
+
+        # Update global state
+        deps.entities = deps.indexer.entities
+        deps.relationships = deps.indexer.relationships
+
+        is_incremental = result.get("incremental", False)
+        skipped = result.get("skipped", False)
+
+        if skipped:
+            msg = "Codebase unchanged — no re-indexing needed (Merkle root identical)"
+        elif is_incremental:
+            added = result.get("added_files", 0)
+            modified = result.get("modified_files", 0)
+            deleted = result.get("deleted_files", 0)
+            msg = (
+                f"Incremental ingestion complete: "
+                f"{added} added, {modified} modified, {deleted} deleted"
+            )
+        else:
+            msg = "Full ingestion complete (first run — Merkle baseline created)"
+
+        return UploadResponse(
+            status="success",
+            message=msg,
+            files_processed=result.get("total_files", 0),
+            entities_extracted=result.get("total_entities", len(deps.entities)),
+            relationships_found=result.get("total_relationships", len(deps.relationships)),
+            incremental=is_incremental,
+            added_files=result.get("added_files"),
+            modified_files=result.get("modified_files"),
+            deleted_files=result.get("deleted_files"),
+            skipped=skipped,
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
