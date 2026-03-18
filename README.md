@@ -1,7 +1,7 @@
 # 🔍 LLM-Powered Ethereum Code Compliance Analysis Platform
 
 <p align="center">
-  <strong>Hybrid Property Graph RAG System with Automated PR Analysis</strong>
+  <strong>Hybrid Property Graph and BM25 System with Automated PR Analysis</strong>
 </p>
 
 <p align="center">
